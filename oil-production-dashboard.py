@@ -143,7 +143,7 @@ def load_from_db():
 # Add new function to manage saved data by date
 def manage_saved_data():
     """
-    Show interface for managing saved data with clickable table list
+    Show interface for managing saved data with dropdown list
     """
     st.sidebar.header("📅 Manage Saved Data")
     
@@ -157,19 +157,24 @@ def manage_saved_data():
     # Get unique dates
     unique_dates = df['Date'].dt.date.unique()
     
-    # Create expandable section for table list
-    with st.sidebar.expander("📋 Saved Tables", expanded=False):
-        # Group by date and show clickable dates
-        for date in sorted(unique_dates, reverse=True):
-            date_str = date.strftime('%Y-%m-%d')
-            if st.button(date_str, key=f"date_{date_str}"):
-                # Filter data for selected date
-                selected_data = df[df['Date'].dt.date == date]
-                
-                # Store in session state to use in main display
-                st.session_state.selected_table = selected_data
-                st.session_state.selected_date = date_str
-                st.rerun()
+    # Create dropdown for table selection
+    date_options = sorted(unique_dates, reverse=True)
+    date_strs = [date.strftime('%Y-%m-%d') for date in date_options]
+    
+    selected_date_str = st.sidebar.selectbox(
+        "📋 Select Saved Table",
+        options=date_strs,
+        key="date_dropdown"
+    )
+    
+    # Load selected table when dropdown value changes
+    if selected_date_str:
+        selected_date = pd.to_datetime(selected_date_str).date()
+        selected_data = df[df['Date'].dt.date == selected_date]
+        
+        # Store in session state to use in main display
+        st.session_state.selected_table = selected_data
+        st.session_state.selected_date = selected_date_str
     
     # Show delete interface
     st.sidebar.subheader("Delete Data")
@@ -207,6 +212,8 @@ def manage_saved_data():
         # Show summary stats
         st.subheader("Summary Statistics")
         st.write(st.session_state.selected_table.describe())
+    
+    # Add a button to clear selection
     if hasattr(st.session_state, 'selected_table'):
         if st.sidebar.button("❌ Clear Selection"):
             del st.session_state.selected_table
