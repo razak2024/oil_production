@@ -401,6 +401,7 @@ def plot_rate_analysis(historical_df, selected_well):
 
 # Streamlit app
 def main():
+    init_db()
     st.title("🛢️ Enhanced Oil Production Dashboard")
     
     # Database management in sidebar
