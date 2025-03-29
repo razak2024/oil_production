@@ -143,7 +143,7 @@ def load_from_db():
 # Add new function to manage saved data by date
 def manage_saved_data():
     """
-    Show interface for managing saved data by date
+    Show interface for managing saved data with clickable table list
     """
     st.sidebar.header("📅 Manage Saved Data")
     
@@ -157,23 +157,29 @@ def manage_saved_data():
     # Get unique dates
     unique_dates = df['Date'].dt.date.unique()
     
-    # Date selection
+    # Create expandable section for table list
+    with st.sidebar.expander("📋 Saved Tables", expanded=False):
+        # Group by date and show clickable dates
+        for date in sorted(unique_dates, reverse=True):
+            date_str = date.strftime('%Y-%m-%d')
+            if st.button(date_str, key=f"date_{date_str}"):
+                # Filter data for selected date
+                selected_data = df[df['Date'].dt.date == date]
+                
+                # Store in session state to use in main display
+                st.session_state.selected_table = selected_data
+                st.session_state.selected_date = date_str
+                st.rerun()
+    
+    # Show delete interface
+    st.sidebar.subheader("Delete Data")
     selected_dates = st.sidebar.multiselect(
-        "Select dates to view/remove",
+        "Select dates to remove",
         sorted(unique_dates, reverse=True),
         format_func=lambda x: x.strftime('%Y-%m-%d')
     )
     
     if selected_dates:
-        # Show data for selected dates
-        st.subheader(f"Data for Selected Dates ({len(selected_dates)} dates)")
-        filtered_df = df[df['Date'].dt.date.isin(selected_dates)]
-        st.dataframe(filtered_df)
-        
-        # Show summary stats
-        st.subheader("Summary Statistics")
-        st.write(filtered_df.describe())
-        
         # Add delete button
         if st.sidebar.button("❌ Delete Selected Dates", type="primary"):
             conn = init_db()
@@ -191,8 +197,21 @@ def manage_saved_data():
             conn.close()
             
             st.sidebar.success(f"Deleted {deleted_rows} records from selected dates!")
-            st.experimental_rerun()
-
+            st.rerun()
+    
+    # In the main display area, show selected table if one was clicked
+    if hasattr(st.session_state, 'selected_table'):
+        st.subheader(f"Data for {st.session_state.selected_date}")
+        st.dataframe(st.session_state.selected_table)
+        
+        # Show summary stats
+        st.subheader("Summary Statistics")
+        st.write(st.session_state.selected_table.describe())
+    if hasattr(st.session_state, 'selected_table'):
+        if st.sidebar.button("❌ Clear Selection"):
+            del st.session_state.selected_table
+            del st.session_state.selected_date
+            st.rerun()
 # Update the reset_database function to be more comprehensive
 def reset_database():
     """
@@ -545,6 +564,10 @@ def main():
     # Initialize database
     conn = init_db()
     conn.close()
+    # Clear table selection if new file is uploaded
+    if 'selected_table' in st.session_state and st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"]):
+        del st.session_state.selected_table
+        del st.session_state.selected_date
     
     st.title("🛢️ Enhanced Oil Production Dashboard")
     
