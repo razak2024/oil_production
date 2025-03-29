@@ -98,7 +98,7 @@ def init_db(df=None):
     
     return conn
 
-# Update the load_from_db function to handle cases where table doesn't exist
+# Update the load_from_db function to ensure numeric conversion
 def load_from_db():
     """
     Load data from SQLite database
@@ -109,9 +109,19 @@ def load_from_db():
     conn = init_db()
     try:
         df = pd.read_sql_query('SELECT * FROM production_data', conn)
+        
         # Convert date back to datetime if needed
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
+        
+        # Ensure numeric columns are properly converted
+        numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)', 
+                       'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
+        
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
         return df
     except pd.errors.DatabaseError:
         return pd.DataFrame()  # Return empty DataFrame if table doesn't exist
@@ -742,21 +752,43 @@ def main():
                 st.write("📅 Latest Production")
                 latest_date = historical_df['Date'].max()
                 latest_data = historical_df[historical_df['Date'] == latest_date]
-                st.write(f"Date: {latest_date.date()}")
-                st.write(f"Oil: {latest_data['Q Huile Corr (Sm³/j)'].sum():,.0f} Sm³/d")
-                st.write(f"Gas: {latest_data['Q Gaz Tot Corr (Sm³/j)'].sum():,.0f} Sm³/d")
-                st.write(f"Water: {latest_data['Q Eau Tot Corr (m³/j)'].sum():,.0f} m³/d")
+                
+                if not latest_data.empty:
+                    st.write(f"Date: {latest_date.date()}")
+                    
+                    # Safely calculate sums with NaN handling
+                    oil_sum = latest_data['Q Huile Corr (Sm³/j)'].sum(skipna=True)
+                    gas_sum = latest_data['Q Gaz Tot Corr (Sm³/j)'].sum(skipna=True)
+                    water_sum = latest_data['Q Eau Tot Corr (m³/j)'].sum(skipna=True)
+                    
+                    st.write(f"Oil: {oil_sum:,.0f} Sm³/d" if pd.notna(oil_sum) else "Oil: No data")
+                    st.write(f"Gas: {gas_sum:,.0f} Sm³/d" if pd.notna(gas_sum) else "Gas: No data")
+                    st.write(f"Water: {water_sum:,.0f} m³/d" if pd.notna(water_sum) else "Water: No data")
+                else:
+                    st.write("No data available for latest date")
             
             with summary_cols[1]:
                 st.write("🏆 Top Performing Wells (Historical)")
-                top_historical = historical_df.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
-                st.dataframe(top_historical)
+                if 'Q Huile Corr (Sm³/j)' in historical_df.columns:
+                    try:
+                        top_historical = historical_df.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
+                        st.dataframe(top_historical)
+                    except Exception as e:
+                        st.warning(f"Could not calculate top wells: {str(e)}")
+                else:
+                    st.warning("Oil production data not available")
                 
                 st.write("📊 Production Trend (Last 30 Days)")
                 recent_data = historical_df[historical_df['Date'] > (historical_df['Date'].max() - pd.Timedelta(days=30))]
-                fig = px.line(recent_data.groupby('Date').agg({'Q Huile Corr (Sm³/j)': 'sum'}).reset_index(),
-                              x='Date', y='Q Huile Corr (Sm³/j)', title="Daily Oil Production Trend")
-                st.plotly_chart(fig, use_container_width=True)
+                if not recent_data.empty and 'Q Huile Corr (Sm³/j)' in recent_data.columns:
+                    try:
+                        fig = px.line(recent_data.groupby('Date').agg({'Q Huile Corr (Sm³/j)': 'sum'}).reset_index(),
+                                      x='Date', y='Q Huile Corr (Sm³/j)', title="Daily Oil Production Trend")
+                        st.plotly_chart(fig, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"Could not generate trend chart: {str(e)}")
+                else:
+                    st.warning("No recent data available for trend analysis")
 
 if __name__ == "__main__":
     main()
