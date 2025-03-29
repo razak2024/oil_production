@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import shutil
+import numpy as np
 import sqlite3
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
@@ -140,13 +140,10 @@ def load_from_db():
     finally:
         conn.close()
 
-# Enhanced function to manage saved data by date with improved dashboard preview
+# Add new function to manage saved data by date
 def manage_saved_data():
     """
-    Show interface for managing saved data with dropdown list and dashboard preview
-    
-    Returns:
-    pandas.DataFrame: Selected data (or None if no selection)
+    Show interface for managing saved data with dropdown list
     """
     st.sidebar.header("📅 Manage Saved Data")
     
@@ -155,7 +152,7 @@ def manage_saved_data():
     
     if df.empty:
         st.sidebar.info("No data in database yet")
-        return None
+        return
     
     # Get unique dates
     unique_dates = df['Date'].dt.date.unique()
@@ -171,62 +168,13 @@ def manage_saved_data():
     )
     
     # Load selected table when dropdown value changes
-    selected_data = None
     if selected_date_str:
         selected_date = pd.to_datetime(selected_date_str).date()
-        selected_data = df[df['Date'].dt.date == selected_date].copy()
+        selected_data = df[df['Date'].dt.date == selected_date]
         
         # Store in session state to use in main display
         st.session_state.selected_table = selected_data
         st.session_state.selected_date = selected_date_str
-        
-        # Show a quick preview/summary of the selected data in the sidebar
-        with st.sidebar.expander("📊 Selected Date Dashboard", expanded=True):
-            # Quick metrics
-            total_oil = selected_data['Q Huile Corr (Sm³/j)'].sum()
-            total_gas = selected_data['Q Gaz Tot Corr (Sm³/j)'].sum()
-            total_water = selected_data['Q Eau Tot Corr (m³/j)'].sum()
-            well_count = selected_data['Puits'].nunique()
-            
-            # Display key metrics in sidebar
-            st.metric("Date", selected_date_str)
-            st.metric("Wells", f"{well_count}")
-            st.metric("Oil Production", f"{total_oil:,.0f} Sm³/d")
-            st.metric("Gas Production", f"{total_gas:,.0f} Sm³/d")
-            st.metric("Water Production", f"{total_water:,.0f} m³/d")
-            
-            # Mini visualization - Top 5 oil producing wells
-            try:
-                top_wells = selected_data.sort_values('Q Huile Corr (Sm³/j)', ascending=False).head(5)
-                fig = px.bar(
-                    top_wells, 
-                    x='Puits', 
-                    y='Q Huile Corr (Sm³/j)',
-                    title="Top 5 Oil Producing Wells",
-                    height=200
-                )
-                fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Reservoir distribution
-                res_chart = selected_data.groupby('Réservoir')['Q Huile Corr (Sm³/j)'].sum().reset_index()
-                if not res_chart.empty:
-                    fig = px.pie(
-                        res_chart, 
-                        values='Q Huile Corr (Sm³/j)', 
-                        names='Réservoir',
-                        title="Oil Production by Reservoir",
-                        height=200
-                    )
-                    fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-                    st.plotly_chart(fig, use_container_width=True)
-            except Exception as e:
-                st.warning(f"Could not generate preview charts: {e}")
-            
-            # Button to analyze this data in the main view
-            if st.button("📈 View Full Analysis", key="view_full_analysis"):
-                st.session_state.show_analysis = True
-                # Will trigger the full analysis in the main area
     
     # Show delete interface
     st.sidebar.subheader("Delete Data")
@@ -256,17 +204,21 @@ def manage_saved_data():
             st.sidebar.success(f"Deleted {deleted_rows} records from selected dates!")
             st.rerun()
     
+    # In the main display area, show selected table if one was clicked
+    if hasattr(st.session_state, 'selected_table'):
+        st.subheader(f"Data for {st.session_state.selected_date}")
+        st.dataframe(st.session_state.selected_table)
+        
+        # Show summary stats
+        st.subheader("Summary Statistics")
+        st.write(st.session_state.selected_table.describe())
+    
     # Add a button to clear selection
     if hasattr(st.session_state, 'selected_table'):
         if st.sidebar.button("❌ Clear Selection"):
             del st.session_state.selected_table
             del st.session_state.selected_date
-            if 'show_analysis' in st.session_state:
-                del st.session_state.show_analysis
             st.rerun()
-    
-    return selected_data
-
 # Update the reset_database function to be more comprehensive
 def reset_database():
     """
@@ -613,272 +565,12 @@ def plot_rate_analysis(historical_df, selected_well):
                                   'Q Huile Test (Sm³/h)', 'Q Gaz Tot Test (Sm³/h)', 'Q Eau Tot Test (m³/h)',
                                   'GOR Tot Test', 'WOR Tot Test']]
         st.dataframe(test_details)
-        
-def show_complete_analysis(df, historical_df):
-    """
-    Show comprehensive analysis of the production data
-    
-    Parameters:
-    df (pandas.DataFrame): Current dataset to analyze
-    historical_df (pandas.DataFrame): Historical data for comparisons
-    """
-    # Summary statistics
-    st.subheader("📊 Production Summary")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    # Ensure numeric columns are properly formatted
-    df['Q Huile Corr (Sm³/j)'] = pd.to_numeric(df['Q Huile Corr (Sm³/j)'], errors='coerce')
-    df['Q Gaz Tot Corr (Sm³/j)'] = pd.to_numeric(df['Q Gaz Tot Corr (Sm³/j)'], errors='coerce')
-    df['Q Eau Tot Corr (m³/j)'] = pd.to_numeric(df['Q Eau Tot Corr (m³/j)'], errors='coerce')
-    
-    # Safely calculate sums
-    total_oil = df['Q Huile Corr (Sm³/j)'].sum()
-    total_gas = df['Q Gaz Tot Corr (Sm³/j)'].sum()
-    total_water = df['Q Eau Tot Corr (m³/j)'].sum()
-    active_wells = len(df[df['Status'] == 'Ouvert']) if 'Status' in df.columns else "N/A"
-    
-    col1.metric("Total Oil Production", f"{total_oil:,.0f} Sm³/d")
-    col2.metric("Total Gas Production", f"{total_gas:,.0f} Sm³/d")
-    col3.metric("Total Water Production", f"{total_water:,.0f} m³/d")
-    col4.metric("Active Wells", active_wells)
-    
-    # Build or load anomaly detection model
-    if os.path.exists('anomaly_model.joblib') and os.path.exists('scaler.joblib'):
-        model = joblib.load('anomaly_model.joblib')
-        scaler = joblib.load('scaler.joblib')
-    else:
-        if not historical_df.empty:
-            model, scaler = train_anomaly_model(historical_df)
-        else:
-            model, scaler = train_anomaly_model(df)
-    
-    # Detect anomalies in current data
-    df['is_anomaly'] = detect_anomalies(df, model, scaler)
-    
-    # Well-level anomaly reporting
-    if df['is_anomaly'].any():
-        st.subheader("⚠️ Well Anomalies Detected")
-        anomaly_wells = df[df['is_anomaly']]
-        st.write(f"{len(anomaly_wells)} wells have unusual pressure patterns")
-        st.dataframe(anomaly_wells[['Puits', 'Réservoir', 'Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)']])
-    
-    # Production comparison charts
-    st.subheader("🛢️ Production by Well")
-    plot_production_comparison(df)
-    
-    # Reservoir analysis
-    st.subheader("📈 Reservoir Analysis")
-    plot_reservoir_performance(df)
-    
-    # Pressure analysis
-    st.subheader("🔍 Pressure Analysis")
-    plot_pressure_analysis(df)
-    
-    # Well-level detailed analysis
-    st.subheader("🔎 Well-Level Analysis")
-    well_options = df['Puits'].unique()
-    selected_well = st.selectbox("Select Well for Detailed Analysis:", well_options)
-    
-    # Historical trends for selected well
-    st.write("### Historical Trends")
-    plot_historical_trends(historical_df, selected_well)
-    
-    # Rate analysis (comparing to test rates)
-    st.write("### Rate Analysis (vs Test Rates)")
-    plot_rate_analysis(historical_df, selected_well)
-    
-    # Well data table
-    st.write("### Well Data")
-    well_data = df[df['Puits'] == selected_well]
-    st.dataframe(well_data)
 
-def upload_saved_tables():
-    """
-    Feature to upload saved tables from the database for analysis
-    """
-    st.sidebar.header("📂 Upload Saved Tables")
-    
-    # Load database to get available dates
-    conn = sqlite3.connect('production_data.db')
-    
-    try:
-        # Check if table exists before querying
-        c = conn.cursor()
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='production_data'")
-        if c.fetchone() is None:
-            st.sidebar.warning("No saved data found in database.")
-            conn.close()
-            return None
-        
-        # Query for unique dates
-        dates_df = pd.read_sql_query("SELECT DISTINCT date(Date) as date_only FROM production_data ORDER BY date_only DESC", conn)
-        
-        if dates_df.empty:
-            st.sidebar.warning("No saved data found in database.")
-            conn.close()
-            return None
-        
-        # Create date selection dropdown
-        selected_date = st.sidebar.selectbox(
-            "Select date to load:",
-            options=dates_df['date_only'].tolist()
-        )
-        
-        if selected_date:
-            # Load data for selected date
-            query = f"SELECT * FROM production_data WHERE date(Date) = '{selected_date}'"
-            df = pd.read_sql_query(query, conn)
-            
-            # Convert date column to datetime
-            df['Date'] = pd.to_datetime(df['Date'])
-            
-            # Button to load selected data
-            if st.sidebar.button("Load Selected Data"):
-                st.session_state.selected_table = df
-                st.session_state.selected_date = selected_date
-                st.sidebar.success(f"Loaded data from {selected_date}")
-                st.rerun()
-                
-            return df
-        
-    except Exception as e:
-        st.sidebar.error(f"Error loading data: {str(e)}")
-    finally:
-        conn.close()
-    
-    return None
-
-def export_database():
-    """
-    Export entire database as SQLite file
-    """
-    st.sidebar.header("💾 Database Export")
-    
-    if st.sidebar.button("Export Entire Database"):
-        # Copy the database file to a temporary location
-        import shutil
-        import tempfile
-        import os
-        
-        try:
-            # Create temp file
-            temp_dir = tempfile.mkdtemp()
-            temp_db_path = os.path.join(temp_dir, 'production_data_export.db')
-            
-            # Copy the database
-            shutil.copy2('production_data.db', temp_db_path)
-            
-            # Read the file as bytes
-            with open(temp_db_path, 'rb') as f:
-                db_bytes = f.read()
-            
-            # Offer download
-            st.sidebar.download_button(
-                label="Download Database File",
-                data=db_bytes,
-                file_name='production_data_export.db',
-                mime='application/octet-stream'
-            )
-            
-            st.sidebar.success("Database prepared for download!")
-            
-        except Exception as e:
-            st.sidebar.error(f"Error exporting database: {str(e)}")
-        finally:
-            # Clean up temp files
-            try:
-                shutil.rmtree(temp_dir)
-            except:
-                pass
-
-def import_database():
-    """
-    Import database from SQLite file
-    """
-    st.sidebar.header("📥 Database Import")
-    
-    uploaded_db = st.sidebar.file_uploader("Upload Database File", type=["db"])
-    
-    if uploaded_db is not None:
-        try:
-            # Save uploaded file temporarily
-            import tempfile
-            import os
-            
-            # Create temp file
-            temp_dir = tempfile.mkdtemp()
-            temp_db_path = os.path.join(temp_dir, 'uploaded_db.db')
-            
-            # Save uploaded file
-            with open(temp_db_path, 'wb') as f:
-                f.write(uploaded_db.getvalue())
-            
-            # Verify it's a valid SQLite database
-            try:
-                conn = sqlite3.connect(temp_db_path)
-                c = conn.cursor()
-                c.execute("PRAGMA integrity_check")
-                result = c.fetchone()[0]
-                conn.close()
-                
-                if result != 'ok':
-                    st.sidebar.error("Invalid SQLite database file")
-                    return
-                
-                # Check if it has the expected schema
-                conn = sqlite3.connect(temp_db_path)
-                c = conn.cursor()
-                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='production_data'")
-                if c.fetchone() is None:
-                    st.sidebar.error("Database does not contain production_data table")
-                    conn.close()
-                    return
-                
-                # Offer merge or replace option
-                import_option = st.sidebar.radio(
-                    "Import Option:",
-                    options=["Merge with existing data", "Replace existing database"]
-                )
-                
-                if st.sidebar.button("Confirm Import"):
-                    if import_option == "Replace existing database":
-                        # Make backup of existing db
-                        if os.path.exists('production_data.db'):
-                            backup_path = 'production_data_backup.db'
-                            shutil.copy2('production_data.db', backup_path)
-                            st.sidebar.info(f"Existing database backed up to {backup_path}")
-                        
-                        # Replace the database
-                        shutil.copy2(temp_db_path, 'production_data.db')
-                        st.sidebar.success("Database replaced successfully!")
-                        st.rerun()
-                    else:
-                        # Merge data
-                        src_conn = sqlite3.connect(temp_db_path)
-                        src_df = pd.read_sql_query("SELECT * FROM production_data", src_conn)
-                        src_conn.close()
-                        
-                        # Save to current database with duplicate checking
-                        save_to_db(src_df)
-                        st.rerun()
-                
-            except Exception as e:
-                st.sidebar.error(f"Error verifying database: {str(e)}")
-            finally:
-                # Clean up
-                try:
-                    shutil.rmtree(temp_dir)
-                except:
-                    pass
-                
-        except Exception as e:
-            st.sidebar.error(f"Error processing uploaded database: {str(e)}")
-
+# Streamlit app
 def main():
     # Initialize database
     conn = init_db()
     conn.close()
-    
     # Clear table selection if new file is uploaded
     if 'selected_table' in st.session_state and st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"]):
         del st.session_state.selected_table
@@ -889,12 +581,7 @@ def main():
     # Database management in sidebar
     st.sidebar.header("Database Management")
     
-    # Add database upload/download features
-    upload_saved_tables()
-    export_database()
-    import_database()
-    
-    # Add the data management feature
+    # Add the new data management feature
     manage_saved_data()
     
     # Keep the reset button but make it more prominent
@@ -905,29 +592,7 @@ def main():
     # File upload
     uploaded_file = st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"])
     
-    # Logic for handling previously selected data from session state
-    if hasattr(st.session_state, 'selected_table') and not uploaded_file:
-        df = st.session_state.selected_table
-        st.info(f"Currently viewing saved data from: {st.session_state.selected_date}")
-        
-        # Load all historical data for comparative analysis
-        historical_df = load_from_db()
-        
-        # Show complete analysis for the selected data
-        show_complete_analysis(df, historical_df)
-        
-        # Data export option for selected data
-        st.sidebar.header("📤 Data Export")
-        if st.sidebar.button("Export Current Analysis"):
-            csv = df.to_csv(index=False)
-            st.sidebar.download_button(
-                label="Download CSV",
-                data=csv,
-                file_name=f'production_analysis_{st.session_state.selected_date}.csv',
-                mime='text/csv'
-            )
-    
-    elif uploaded_file is not None:
+    if uploaded_file is not None:
         try:
             df = pd.read_excel(uploaded_file)
             st.sidebar.success("File uploaded successfully!")
@@ -952,8 +617,153 @@ def main():
                 if col in historical_df.columns:
                     historical_df[col] = pd.to_numeric(historical_df[col], errors='coerce')
             
-            # Show complete analysis for the uploaded data
-            show_complete_analysis(df, historical_df)
+            # Display raw data
+            with st.expander("View Raw Data"):
+                st.dataframe(df)
+            
+            # Production Analysis
+            st.header("📊 Production Analysis")
+            
+            # Summary metrics
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.subheader("Oil Production")
+                oil_wells = df[df['Q Huile Corr (Sm³/j)'] > 0]
+                st.metric("Total Oil Production", f"{oil_wells['Q Huile Corr (Sm³/j)'].sum():,.0f} Sm³/d")
+                st.metric("Number of Producing Wells", len(oil_wells))
+                st.metric("Average Oil Rate", f"{oil_wells['Q Huile Corr (Sm³/j)'].mean():,.0f} Sm³/d")
+                
+            with col2:
+                st.subheader("Gas Production")
+                gas_wells = df[df['Q Gaz Tot Corr (Sm³/j)'] > 0]
+                st.metric("Total Gas Production", f"{gas_wells['Q Gaz Tot Corr (Sm³/j)'].sum():,.0f} Sm³/d")
+                st.metric("Number of Gas Producing Wells", len(gas_wells))
+                if not oil_wells.empty and oil_wells['Q Huile Corr (Sm³/j)'].sum() > 0:
+                    st.metric("Average GOR", f"{gas_wells['Q Gaz Tot Corr (Sm³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():,.0f} Sm³/Sm³")
+                
+            with col3:
+                st.subheader("Water Production")
+                water_wells = df[df['Q Eau Tot Corr (m³/j)'] > 0]
+                st.metric("Total Water Production", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum():,.0f} m³/d")
+                if not oil_wells.empty and not water_wells.empty:
+                    total_fluid = oil_wells['Q Huile Corr (Sm³/j)'].sum() + water_wells['Q Eau Tot Corr (m³/j)'].sum()
+                    if total_fluid > 0:
+                        st.metric("Water Cut (%)", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / total_fluid * 100:.1f}%")
+                    if oil_wells['Q Huile Corr (Sm³/j)'].sum() > 0:
+                        st.metric("Average WOR", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():.2f} m³/Sm³")
+            
+            # Production comparison visualization
+            st.subheader("Production Comparison by Well")
+            plot_production_comparison(df)
+            
+            # Reservoir performance
+            st.subheader("Reservoir Performance Analysis")
+            plot_reservoir_performance(df)
+            
+            # Well Classification (HP/LP)
+            st.header("🔧 Well Classification (HP/LP)")
+            
+            # Define thresholds (can be adjusted)
+            hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 20, 50, 30)
+            
+            # Ensure Pp column is numeric
+            df['Pp (bar)'] = pd.to_numeric(df['Pp (bar)'], errors='coerce')
+            df['Well Class'] = np.where(df['Pp (bar)'] >= hp_threshold, 'HP', 'LP')
+            
+            class_cols = st.columns(2)
+            
+            with class_cols[0]:
+                st.subheader("Well Classification Summary")
+                class_summary = df.groupby('Well Class').agg({
+                    'Puits': 'count',
+                    'Q Huile Corr (Sm³/j)': ['sum', 'mean'],
+                    'Pp (bar)': 'mean'
+                })
+                st.dataframe(class_summary.style.background_gradient(cmap='Blues'))
+                
+            with class_cols[1]:
+                st.subheader("Production by Well Class")
+                fig = px.box(df, x='Well Class', y='Q Huile Corr (Sm³/j)', color='Well Class',
+                             points="all", hover_data=['Puits'])
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Pressure Analysis
+            st.header("📈 Pressure Analysis")
+            plot_pressure_analysis(df)
+            
+            # Anomaly Detection
+            st.header("⚠️ Anomaly Detection in WHP")
+            
+            # Train or load model
+            if os.path.exists('anomaly_model.joblib') and os.path.exists('scaler.joblib'):
+                model = joblib.load('anomaly_model.joblib')
+                scaler = joblib.load('scaler.joblib')
+            else:
+                model, scaler = train_anomaly_model(historical_df)
+            
+            df['Anomaly'] = detect_anomalies(df, model, scaler)
+            
+            anomaly_cols = st.columns([2, 1])
+            
+            with anomaly_cols[0]:
+                st.subheader("Anomaly Detection Results")
+                anomaly_wells = df[df['Anomaly']]
+                
+                if not anomaly_wells.empty:
+                    st.warning(f"⚠️ {len(anomaly_wells)} potential anomalies detected!")
+                    
+                    # Plot anomalies with Plotly
+                    fig = px.scatter(df, x='Pt (bar)', y='Pp (bar)', color='Anomaly',
+                                     hover_data=['Puits', 'Status', 'Q Huile Corr (Sm³/j)'],
+                                     title="Anomaly Detection in WHP vs Flowline Pressure")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.success("No anomalies detected in today's data.")
+            
+            with anomaly_cols[1]:
+                if not anomaly_wells.empty:
+                    st.subheader("Anomaly Details")
+                    st.dataframe(anomaly_wells[['Puits', 'Pt (bar)', 'Pp (bar)', 'Status', 'Q Huile Corr (Sm³/j)']])
+            
+            # Historical Trends and Rate Analysis
+            st.header("📅 Historical Analysis")
+            
+            trend_cols = st.columns(2)
+            
+            with trend_cols[0]:
+                selected_well = st.selectbox("Select Well for Analysis", df['Puits'].unique())
+                
+            with trend_cols[1]:
+                selected_reservoir = st.selectbox("Select Reservoir for Analysis", df['Réservoir'].unique())
+                reservoir_wells = df[df['Réservoir'] == selected_reservoir]['Puits'].unique()
+                st.selectbox("Select Well from Reservoir", reservoir_wells)
+            
+            # Tabs for different analysis types
+            tab1, tab2 = st.tabs(["Historical Trends", "Rate Analysis"])
+            
+            with tab1:
+                plot_historical_trends(historical_df, selected_well)
+            
+            with tab2:
+                st.subheader(f"Rate Analysis for {selected_well}")
+                plot_rate_analysis(historical_df, selected_well)
+            
+            # Additional reservoir analysis
+            st.subheader(f"Reservoir {selected_reservoir} Analysis")
+            
+            res_cols = st.columns(2)
+            
+            with res_cols[0]:
+                res_wells = historical_df[historical_df['Réservoir'] == selected_reservoir]
+                fig = px.line(res_wells, x='Date', y='Q Huile Corr (Sm³/j)', color='Puits',
+                              title=f"Oil Production Trend - {selected_reservoir}")
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with res_cols[1]:
+                fig = px.line(res_wells, x='Date', y='Pp (bar)', color='Puits',
+                              title=f"Flowline Pressure Trend - {selected_reservoir}")
+                st.plotly_chart(fig, use_container_width=True)
             
             # Data export
             st.sidebar.header("📤 Data Export")
@@ -969,90 +779,89 @@ def main():
         except Exception as e:
             st.error(f"Error processing file: {str(e)}")
     else:
-        st.info("Please upload an Excel file or select saved data to begin analysis.")
+        st.info("Please upload an Excel file to begin analysis.")
         
         # Show historical data if available
         historical_df = load_from_db()
         if not historical_df.empty:
             st.subheader("Historical Data Summary")
         
-            # Handle case where Date column might be missing or invalid
+        # Handle case where Date column might be missing or invalid
+        try:
+            date_range = f"from {historical_df['Date'].min().date()} to {historical_df['Date'].max().date()}"
+        except (AttributeError, KeyError):
+            date_range = "with unknown date range"
+        
+        st.write(f"Database contains {len(historical_df)} records {date_range}")
+        
+        # Show some summary stats
+        summary_cols = st.columns(2)
+        
+        with summary_cols[0]:
+            st.write("📅 Latest Production")
+            
             try:
-                date_range = f"from {historical_df['Date'].min().date()} to {historical_df['Date'].max().date()}"
-            except (AttributeError, KeyError):
-                date_range = "with unknown date range"
-            
-            st.write(f"Database contains {len(historical_df)} records {date_range}")
-            
-            # Show some summary stats
-            summary_cols = st.columns(2)
-            
-            with summary_cols[0]:
-                st.write("📅 Latest Production")
+                latest_date = historical_df['Date'].max()
+                latest_data = historical_df[historical_df['Date'] == latest_date]
                 
-                try:
-                    latest_date = historical_df['Date'].max()
-                    latest_data = historical_df[historical_df['Date'] == latest_date]
+                if not latest_data.empty:
+                    st.write(f"Date: {latest_date.date()}")
                     
-                    if not latest_data.empty:
-                        st.write(f"Date: {latest_date.date()}")
-                        
-                        # Safely calculate sums with proper NaN handling
-                        def safe_sum(series):
-                            try:
-                                return series.sum(skipna=True)
-                            except (TypeError, ValueError):
-                                return float('nan')
-                        
-                        oil_sum = safe_sum(latest_data.get('Q Huile Corr (Sm³/j)', pd.Series()))
-                        gas_sum = safe_sum(latest_data.get('Q Gaz Tot Corr (Sm³/j)', pd.Series()))
-                        water_sum = safe_sum(latest_data.get('Q Eau Tot Corr (m³/j)', pd.Series()))
-                        
-                        st.write(f"Oil: {oil_sum:,.0f} Sm³/d" if pd.notna(oil_sum) else "Oil: Data unavailable")
-                        st.write(f"Gas: {gas_sum:,.0f} Sm³/d" if pd.notna(gas_sum) else "Gas: Data unavailable")
-                        st.write(f"Water: {water_sum:,.0f} m³/d" if pd.notna(water_sum) else "Water: Data unavailable")
-                    else:
-                        st.write("No data available for latest date")
-                except Exception as e:
-                    st.error(f"Error displaying latest production: {str(e)}")
+                    # Safely calculate sums with proper NaN handling
+                    def safe_sum(series):
+                        try:
+                            return series.sum(skipna=True)
+                        except (TypeError, ValueError):
+                            return float('nan')
+                    
+                    oil_sum = safe_sum(latest_data.get('Q Huile Corr (Sm³/j)', pd.Series()))
+                    gas_sum = safe_sum(latest_data.get('Q Gaz Tot Corr (Sm³/j)', pd.Series()))
+                    water_sum = safe_sum(latest_data.get('Q Eau Tot Corr (m³/j)', pd.Series()))
+                    
+                    st.write(f"Oil: {oil_sum:,.0f} Sm³/d" if pd.notna(oil_sum) else "Oil: Data unavailable")
+                    st.write(f"Gas: {gas_sum:,.0f} Sm³/d" if pd.notna(gas_sum) else "Gas: Data unavailable")
+                    st.write(f"Water: {water_sum:,.0f} m³/d" if pd.notna(water_sum) else "Water: Data unavailable")
+                else:
+                    st.write("No data available for latest date")
+            except Exception as e:
+                st.error(f"Error displaying latest production: {str(e)}")
+        
+        with summary_cols[1]:
+            st.write("🏆 Top Performing Wells (Historical)")
             
-            with summary_cols[1]:
-                st.write("🏆 Top Performing Wells (Historical)")
-                
-                try:
-                    if 'Q Huile Corr (Sm³/j)' in historical_df.columns:
-                        # Filter out NaN values before calculating top wells
-                        valid_wells = historical_df[historical_df['Q Huile Corr (Sm³/j)'].notna()]
-                        if not valid_wells.empty:
-                            top_historical = valid_wells.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
-                            st.dataframe(top_historical)
-                        else:
-                            st.warning("No valid oil production data available")
+            try:
+                if 'Q Huile Corr (Sm³/j)' in historical_df.columns:
+                    # Filter out NaN values before calculating top wells
+                    valid_wells = historical_df[historical_df['Q Huile Corr (Sm³/j)'].notna()]
+                    if not valid_wells.empty:
+                        top_historical = valid_wells.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
+                        st.dataframe(top_historical)
                     else:
-                        st.warning("Oil production column not found in data")
-                except Exception as e:
-                    st.error(f"Error calculating top wells: {str(e)}")
-                
-                st.write("📊 Production Trend (Last 30 Days)")
-                try:
-                    if 'Date' in historical_df.columns and 'Q Huile Corr (Sm³/j)' in historical_df.columns:
-                        recent_data = historical_df[
-                            (historical_df['Date'] > (historical_df['Date'].max() - pd.Timedelta(days=30))) &
-                            (historical_df['Q Huile Corr (Sm³/j)'].notna())
-                        ]
-                        
-                        if not recent_data.empty:
-                            trend_data = recent_data.groupby('Date')['Q Huile Corr (Sm³/j)'].sum().reset_index()
-                            fig = px.line(trend_data, x='Date', y='Q Huile Corr (Sm³/j)', 
-                                         title="Daily Oil Production Trend")
-                            st.plotly_chart(fig, use_container_width=True)
-                        else:
-                            st.warning("No recent data available for trend analysis")
+                        st.warning("No valid oil production data available")
+                else:
+                    st.warning("Oil production column not found in data")
+            except Exception as e:
+                st.error(f"Error calculating top wells: {str(e)}")
+            
+            st.write("📊 Production Trend (Last 30 Days)")
+            try:
+                if 'Date' in historical_df.columns and 'Q Huile Corr (Sm³/j)' in historical_df.columns:
+                    recent_data = historical_df[
+                        (historical_df['Date'] > (historical_df['Date'].max() - pd.Timedelta(days=30))) &
+                        (historical_df['Q Huile Corr (Sm³/j)'].notna())
+                    ]
+                    
+                    if not recent_data.empty:
+                        trend_data = recent_data.groupby('Date')['Q Huile Corr (Sm³/j)'].sum().reset_index()
+                        fig = px.line(trend_data, x='Date', y='Q Huile Corr (Sm³/j)', 
+                                     title="Daily Oil Production Trend")
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
-                        st.warning("Required columns missing for trend analysis")
-                except Exception as e:
-                    st.error(f"Error generating trend chart: {str(e)}")
+                        st.warning("No recent data available for trend analysis")
+                else:
+                    st.warning("Required columns missing for trend analysis")
+            except Exception as e:
+                st.error(f"Error generating trend chart: {str(e)}")
 
-# Run the application
 if __name__ == "__main__":
     main()
