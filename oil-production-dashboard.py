@@ -14,81 +14,182 @@ import plotly.graph_objects as go
 # Page configuration
 st.set_page_config(page_title="Oil Production Dashboard", layout="wide", page_icon="🛢️")
 
+# Update the init_db function to return connection
 def init_db(df=None):
     """
     Initialize database with default or provided schema
     
     Parameters:
     df (pandas.DataFrame, optional): DataFrame to use as schema template
+    
+    Returns:
+    sqlite3.Connection: Database connection
     """
     conn = sqlite3.connect('production_data.db')
     c = conn.cursor()
     
-    # Default schema if no DataFrame is provided
-    default_columns = [
-        '"Date" TEXT', '"Puits" TEXT', '"Type Puits" TEXT', '"Périmètre" TEXT', 
-        '"Réservoir" TEXT', '"Manif" TEXT', '"Unité" TEXT', '"mode de calcul" TEXT', 
-        '"Status" TEXT', '"Duse (mm)" REAL', '"Pt (bar)" REAL', '"Pp (bar)" REAL', 
-        '"Heures de marche" REAL', '"P_Amont GL (bar)" REAL', 
-        '"P_Aval GL (bar)" REAL', '"Heures de marche GL" REAL', 
-        '"HW GL (inH20)" REAL', '"Q GL Calc (Sm³/j)" REAL', 
-        '"Q GL Corr (Sm³/j)" REAL', '"Q Huile Calc (Sm³/j)" REAL', 
-        '"Q Huile Corr (Sm³/j)" REAL', '"Q Gaz Form Calc (Sm³/j)" REAL', 
-        '"Q Gaz Tot Calc (Sm³/j)" REAL', '"Q Gaz Form Corr (Sm³/j)" REAL', 
-        '"Q Gaz Tot Corr (Sm³/j)" REAL', '"Q Eau Form Calc (m³/j)" REAL', 
-        '"Q Eau Tot Calc (m³/j)" REAL', '"Q Eau Form Corr (m³/j)" REAL', 
-        '"Pompage dans Tubing (m³/j)" REAL', 
-        '"pompage dans Collecte (m³/j)" REAL', 
-        '"Eau de Dessalage (m³/j)" REAL', 
-        '"Q Eau inj (m³/j)" REAL', '"Q Eau Tot Corr (m³/j)" REAL', 
-        '"MAP (Sm³/j)" REAL', '"Date Fermeture" TEXT', 
-        '"Observations" TEXT', '"Date Dernier Test" TEXT', 
-        '"Coef K" REAL', '"Duse Test (mm)" REAL', 
-        '"Pt Test (bar)" REAL', '"Pp Test (bar)" REAL', 
-        '"Q Huile Test (Sm³/h)" REAL', '"Q Gaz Tot Test (Sm³/h)" REAL', 
-        '"Q GL Test (Sm³/h)" REAL', '"Q Eau Tot Test (m³/h)" REAL', 
-        '"Q Eau inj Test (m³/h)" REAL', '"GOR Form Test" REAL', 
-        '"GOR Tot Test" REAL', '"WOR Form Test" REAL', 
-        '"WOR Tot Test" REAL', '"GLR Form Test" REAL', 
-        '"GLR Tot Test" REAL', '"Densité Test" REAL'
-    ]
+    # Check if table exists
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='production_data'")
+    table_exists = c.fetchone() is not None
     
-    # If a DataFrame is provided, override with its schema
-    if df is not None:
-        # Create column definitions with proper quoting
-        column_defs = []
-        for col in df.columns:
-            # Determine SQLite data type based on column dtype
-            if pd.api.types.is_string_dtype(df[col]):
-                col_type = 'TEXT'
-            elif pd.api.types.is_numeric_dtype(df[col]):
-                col_type = 'REAL'
-            else:
-                col_type = 'TEXT'
-            
-            # Always quote column names to handle special characters
-            quoted_col = f'"{col}"'
-            column_defs.append(f"{quoted_col} {col_type}")
-    else:
-        # Use default columns
-        column_defs = default_columns
+    if not table_exists:
+        # Default schema if no DataFrame is provided
+        default_columns = [
+            '"Date" TEXT', '"Puits" TEXT', '"Type Puits" TEXT', '"Périmètre" TEXT', 
+            '"Réservoir" TEXT', '"Manif" TEXT', '"Unité" TEXT', '"mode de calcul" TEXT', 
+            '"Status" TEXT', '"Duse (mm)" REAL', '"Pt (bar)" REAL', '"Pp (bar)" REAL', 
+            '"Heures de marche" REAL', '"P_Amont GL (bar)" REAL', 
+            '"P_Aval GL (bar)" REAL', '"Heures de marche GL" REAL', 
+            '"HW GL (inH20)" REAL', '"Q GL Calc (Sm³/j)" REAL', 
+            '"Q GL Corr (Sm³/j)" REAL', '"Q Huile Calc (Sm³/j)" REAL', 
+            '"Q Huile Corr (Sm³/j)" REAL', '"Q Gaz Form Calc (Sm³/j)" REAL', 
+            '"Q Gaz Tot Calc (Sm³/j)" REAL', '"Q Gaz Form Corr (Sm³/j)" REAL', 
+            '"Q Gaz Tot Corr (Sm³/j)" REAL', '"Q Eau Form Calc (m³/j)" REAL', 
+            '"Q Eau Tot Calc (m³/j)" REAL', '"Q Eau Form Corr (m³/j)" REAL', 
+            '"Pompage dans Tubing (m³/j)" REAL', 
+            '"pompage dans Collecte (m³/j)" REAL', 
+            '"Eau de Dessalage (m³/j)" REAL', 
+            '"Q Eau inj (m³/j)" REAL', '"Q Eau Tot Corr (m³/j)" REAL', 
+            '"MAP (Sm³/j)" REAL', '"Date Fermeture" TEXT', 
+            '"Observations" TEXT', '"Date Dernier Test" TEXT', 
+            '"Coef K" REAL', '"Duse Test (mm)" REAL', 
+            '"Pt Test (bar)" REAL', '"Pp Test (bar)" REAL', 
+            '"Q Huile Test (Sm³/h)" REAL', '"Q Gaz Tot Test (Sm³/h)" REAL', 
+            '"Q GL Test (Sm³/h)" REAL', '"Q Eau Tot Test (m³/h)" REAL', 
+            '"Q Eau inj Test (m³/h)" REAL', '"GOR Form Test" REAL', 
+            '"GOR Tot Test" REAL', '"WOR Form Test" REAL', 
+            '"WOR Tot Test" REAL', '"GLR Form Test" REAL', 
+            '"GLR Tot Test" REAL', '"Densité Test" REAL'
+        ]
+        
+        # If a DataFrame is provided, override with its schema
+        if df is not None:
+            # Create column definitions with proper quoting
+            column_defs = []
+            for col in df.columns:
+                # Determine SQLite data type based on column dtype
+                if pd.api.types.is_string_dtype(df[col]):
+                    col_type = 'TEXT'
+                elif pd.api.types.is_numeric_dtype(df[col]):
+                    col_type = 'REAL'
+                else:
+                    col_type = 'TEXT'
+                
+                # Always quote column names to handle special characters
+                quoted_col = f'"{col}"'
+                column_defs.append(f"{quoted_col} {col_type}")
+        else:
+            # Use default columns
+            column_defs = default_columns
+        
+        # Create table with columns
+        create_table_sql = f"""
+        CREATE TABLE production_data (
+            {', '.join(column_defs)},
+            UNIQUE(Date, Puits)  -- Add unique constraint on date and well combination
+        )
+        """
+        
+        try:
+            c.execute(create_table_sql)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            st.error(f"Error creating table: {e}")
     
-    # Create table with columns
-    create_table_sql = f"""
-    CREATE TABLE IF NOT EXISTS production_data (
-        {', '.join(column_defs)},
-        UNIQUE(Date, Puits)  -- Add unique constraint on date and well combination
-    )
+    return conn
+
+# Update the load_from_db function to handle cases where table doesn't exist
+def load_from_db():
     """
+    Load data from SQLite database
     
+    Returns:
+    pandas.DataFrame: Loaded database contents (empty DataFrame if no data exists)
+    """
+    conn = init_db()
     try:
-        c.execute(create_table_sql)
-        conn.commit()
-    except sqlite3.OperationalError as e:
-        print(f"Error creating table: {e}")
-        print("SQL Query:", create_table_sql)
+        df = pd.read_sql_query('SELECT * FROM production_data', conn)
+        # Convert date back to datetime if needed
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'])
+        return df
+    except pd.errors.DatabaseError:
+        return pd.DataFrame()  # Return empty DataFrame if table doesn't exist
     finally:
         conn.close()
+
+# Add new function to manage saved data by date
+def manage_saved_data():
+    """
+    Show interface for managing saved data by date
+    """
+    st.sidebar.header("📅 Manage Saved Data")
+    
+    # Load all data
+    df = load_from_db()
+    
+    if df.empty:
+        st.sidebar.info("No data in database yet")
+        return
+    
+    # Get unique dates
+    unique_dates = df['Date'].dt.date.unique()
+    
+    # Date selection
+    selected_dates = st.sidebar.multiselect(
+        "Select dates to view/remove",
+        sorted(unique_dates, reverse=True),
+        format_func=lambda x: x.strftime('%Y-%m-%d')
+    )
+    
+    if selected_dates:
+        # Show data for selected dates
+        st.subheader(f"Data for Selected Dates ({len(selected_dates)} dates)")
+        filtered_df = df[df['Date'].dt.date.isin(selected_dates)]
+        st.dataframe(filtered_df)
+        
+        # Show summary stats
+        st.subheader("Summary Statistics")
+        st.write(filtered_df.describe())
+        
+        # Add delete button
+        if st.sidebar.button("❌ Delete Selected Dates", type="primary"):
+            conn = init_db()
+            c = conn.cursor()
+            
+            # Convert dates to strings in the database format
+            date_strs = [d.strftime('%Y-%m-%d') for d in selected_dates]
+            
+            # Delete records
+            placeholders = ','.join(['?'] * len(date_strs))
+            c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", date_strs)
+            
+            deleted_rows = conn.total_changes
+            conn.commit()
+            conn.close()
+            
+            st.sidebar.success(f"Deleted {deleted_rows} records from selected dates!")
+            st.experimental_rerun()
+
+# Update the reset_database function to be more comprehensive
+def reset_database():
+    """
+    Completely reset the database (use with caution)
+    """
+    conn = sqlite3.connect('production_data.db')
+    c = conn.cursor()
+    
+    # Get list of all tables
+    c.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = c.fetchall()
+    
+    # Drop all tables
+    for table in tables:
+        c.execute(f"DROP TABLE IF EXISTS {table[0]}")
+    
+    conn.commit()
+    conn.close()
+    st.success("Database has been completely reset!")
 
 def save_to_db(df):
     """
@@ -127,34 +228,6 @@ def save_to_db(df):
         st.info("No new records to save after duplicate removal.")
     
     conn.close()
-
-def load_from_db():
-    """
-    Load data from SQLite database
-    
-    Returns:
-    pandas.DataFrame: Loaded database contents
-    """
-    conn = sqlite3.connect('production_data.db')
-    df = pd.read_sql_query('SELECT * FROM production_data', conn)
-    conn.close()
-    
-    # Convert date back to datetime if needed
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
-    
-    return df
-
-def reset_database():
-    """
-    Completely reset the database (use with caution)
-    """
-    conn = sqlite3.connect('production_data.db')
-    c = conn.cursor()
-    c.execute('DROP TABLE IF EXISTS production_data')
-    conn.commit()
-    conn.close()
-    st.success("Database has been reset!")
 
 # Update the DataFrame parsing to convert date column
 def parse_excel(uploaded_file):
@@ -447,13 +520,22 @@ def plot_rate_analysis(historical_df, selected_well):
 
 # Streamlit app
 def main():
-    init_db()
+    # Initialize database
+    conn = init_db()
+    conn.close()
+    
     st.title("🛢️ Enhanced Oil Production Dashboard")
     
     # Database management in sidebar
     st.sidebar.header("Database Management")
-    if st.sidebar.button("Reset Database (Caution!)"):
+    
+    # Add the new data management feature
+    manage_saved_data()
+    
+    # Keep the reset button but make it more prominent
+    if st.sidebar.button("⚠️ Reset Entire Database (Caution!)", type="secondary"):
         reset_database()
+        st.experimental_rerun()
     
     # File upload
     uploaded_file = st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"])
