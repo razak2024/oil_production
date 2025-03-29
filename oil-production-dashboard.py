@@ -158,11 +158,8 @@ def reset_database():
 
 # Update the DataFrame parsing to convert date column
 def parse_excel(uploaded_file):
-    df = pd.read_excel(uploaded_file, parse_dates=['Date'])
-    
-    # Ensure consistent date format
+    df = pd.read_excel(uploaded_file, engine='openpyxl', parse_dates=['Date'])
     df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
-    
     return df
 
 # Initialize database
