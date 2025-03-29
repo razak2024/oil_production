@@ -101,7 +101,7 @@ def init_db(df=None):
 # Update the load_from_db function to ensure numeric conversion
 def load_from_db():
     """
-    Load data from SQLite database
+    Load data from SQLite database with robust type conversion
     
     Returns:
     pandas.DataFrame: Loaded database contents (empty DataFrame if no data exists)
@@ -112,16 +112,28 @@ def load_from_db():
         
         # Convert date back to datetime if needed
         if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         
-        # Ensure numeric columns are properly converted
-        numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)', 
-                       'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
+        # List of numeric columns that need conversion
+        numeric_cols = [
+            'Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)', 
+            'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)',
+            'Q Gaz Form Corr (Sm³/j)', 'Q Eau Form Corr (m³/j)'
+        ]
         
+        # Convert numeric columns, handling various formats
         for col in numeric_cols:
             if col in df.columns:
+                # First try direct numeric conversion
                 df[col] = pd.to_numeric(df[col], errors='coerce')
                 
+                # For columns that might have comma as decimal separator
+                if df[col].isna().any():
+                    df[col] = pd.to_numeric(
+                        df[col].astype(str).str.replace(',', '.'), 
+                        errors='coerce'
+                    )
+        
         return df
     except pd.errors.DatabaseError:
         return pd.DataFrame()  # Return empty DataFrame if table doesn't exist
@@ -743,52 +755,83 @@ def main():
         historical_df = load_from_db()
         if not historical_df.empty:
             st.subheader("Historical Data Summary")
-            st.write(f"Database contains {len(historical_df)} records from {historical_df['Date'].min().date()} to {historical_df['Date'].max().date()}")
+        
+        # Handle case where Date column might be missing or invalid
+        try:
+            date_range = f"from {historical_df['Date'].min().date()} to {historical_df['Date'].max().date()}"
+        except (AttributeError, KeyError):
+            date_range = "with unknown date range"
+        
+        st.write(f"Database contains {len(historical_df)} records {date_range}")
+        
+        # Show some summary stats
+        summary_cols = st.columns(2)
+        
+        with summary_cols[0]:
+            st.write("📅 Latest Production")
             
-            # Show some summary stats
-            summary_cols = st.columns(2)
-            
-            with summary_cols[0]:
-                st.write("📅 Latest Production")
+            try:
                 latest_date = historical_df['Date'].max()
                 latest_data = historical_df[historical_df['Date'] == latest_date]
                 
                 if not latest_data.empty:
                     st.write(f"Date: {latest_date.date()}")
                     
-                    # Safely calculate sums with NaN handling
-                    oil_sum = latest_data['Q Huile Corr (Sm³/j)'].sum(skipna=True)
-                    gas_sum = latest_data['Q Gaz Tot Corr (Sm³/j)'].sum(skipna=True)
-                    water_sum = latest_data['Q Eau Tot Corr (m³/j)'].sum(skipna=True)
+                    # Safely calculate sums with proper NaN handling
+                    def safe_sum(series):
+                        try:
+                            return series.sum(skipna=True)
+                        except (TypeError, ValueError):
+                            return float('nan')
                     
-                    st.write(f"Oil: {oil_sum:,.0f} Sm³/d" if pd.notna(oil_sum) else "Oil: No data")
-                    st.write(f"Gas: {gas_sum:,.0f} Sm³/d" if pd.notna(gas_sum) else "Gas: No data")
-                    st.write(f"Water: {water_sum:,.0f} m³/d" if pd.notna(water_sum) else "Water: No data")
+                    oil_sum = safe_sum(latest_data.get('Q Huile Corr (Sm³/j)', pd.Series()))
+                    gas_sum = safe_sum(latest_data.get('Q Gaz Tot Corr (Sm³/j)', pd.Series()))
+                    water_sum = safe_sum(latest_data.get('Q Eau Tot Corr (m³/j)', pd.Series()))
+                    
+                    st.write(f"Oil: {oil_sum:,.0f} Sm³/d" if pd.notna(oil_sum) else "Oil: Data unavailable")
+                    st.write(f"Gas: {gas_sum:,.0f} Sm³/d" if pd.notna(gas_sum) else "Gas: Data unavailable")
+                    st.write(f"Water: {water_sum:,.0f} m³/d" if pd.notna(water_sum) else "Water: Data unavailable")
                 else:
                     st.write("No data available for latest date")
+            except Exception as e:
+                st.error(f"Error displaying latest production: {str(e)}")
+        
+        with summary_cols[1]:
+            st.write("🏆 Top Performing Wells (Historical)")
             
-            with summary_cols[1]:
-                st.write("🏆 Top Performing Wells (Historical)")
+            try:
                 if 'Q Huile Corr (Sm³/j)' in historical_df.columns:
-                    try:
-                        top_historical = historical_df.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
+                    # Filter out NaN values before calculating top wells
+                    valid_wells = historical_df[historical_df['Q Huile Corr (Sm³/j)'].notna()]
+                    if not valid_wells.empty:
+                        top_historical = valid_wells.groupby('Puits')['Q Huile Corr (Sm³/j)'].mean().nlargest(5)
                         st.dataframe(top_historical)
-                    except Exception as e:
-                        st.warning(f"Could not calculate top wells: {str(e)}")
+                    else:
+                        st.warning("No valid oil production data available")
                 else:
-                    st.warning("Oil production data not available")
-                
-                st.write("📊 Production Trend (Last 30 Days)")
-                recent_data = historical_df[historical_df['Date'] > (historical_df['Date'].max() - pd.Timedelta(days=30))]
-                if not recent_data.empty and 'Q Huile Corr (Sm³/j)' in recent_data.columns:
-                    try:
-                        fig = px.line(recent_data.groupby('Date').agg({'Q Huile Corr (Sm³/j)': 'sum'}).reset_index(),
-                                      x='Date', y='Q Huile Corr (Sm³/j)', title="Daily Oil Production Trend")
+                    st.warning("Oil production column not found in data")
+            except Exception as e:
+                st.error(f"Error calculating top wells: {str(e)}")
+            
+            st.write("📊 Production Trend (Last 30 Days)")
+            try:
+                if 'Date' in historical_df.columns and 'Q Huile Corr (Sm³/j)' in historical_df.columns:
+                    recent_data = historical_df[
+                        (historical_df['Date'] > (historical_df['Date'].max() - pd.Timedelta(days=30))) &
+                        (historical_df['Q Huile Corr (Sm³/j)'].notna())
+                    ]
+                    
+                    if not recent_data.empty:
+                        trend_data = recent_data.groupby('Date')['Q Huile Corr (Sm³/j)'].sum().reset_index()
+                        fig = px.line(trend_data, x='Date', y='Q Huile Corr (Sm³/j)', 
+                                     title="Daily Oil Production Trend")
                         st.plotly_chart(fig, use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"Could not generate trend chart: {str(e)}")
+                    else:
+                        st.warning("No recent data available for trend analysis")
                 else:
-                    st.warning("No recent data available for trend analysis")
+                    st.warning("Required columns missing for trend analysis")
+            except Exception as e:
+                st.error(f"Error generating trend chart: {str(e)}")
 
 if __name__ == "__main__":
     main()
