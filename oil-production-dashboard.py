@@ -535,7 +535,7 @@ def main():
     # Keep the reset button but make it more prominent
     if st.sidebar.button("⚠️ Reset Entire Database (Caution!)", type="secondary"):
         reset_database()
-        st.experimental_rerun()
+        st.rerun()
     
     # File upload
     uploaded_file = st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"])
