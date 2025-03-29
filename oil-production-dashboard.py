@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import sqlite3
-from sklearn.ensemble import IsolationForest
+from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import joblib
 import os
@@ -289,27 +289,57 @@ def parse_excel(uploaded_file):
 # Initialize database
 init_db()
 
-# Anomaly detection model setup
-def train_anomaly_model(df):
-    # Use WHP (Pt) and flowline pressure (Pp) for anomaly detection
-    # Ensure all columns are numeric by converting to float
+def train_pressure_model(df):
+    """Train K-means model on pressure data"""
     df = df.copy()
+    # Use WHP (Pt) and flowline pressure (Pp) for clustering
     numeric_cols = ['Pt (bar)', 'Pp (bar)']
+    
+    # Convert to numeric and drop NA
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
     X = df[numeric_cols].dropna()
+    
+    if len(X) < 3:  # Need at least 3 points for K-means
+        return None, None
+    
+    # Scale data
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # Train Isolation Forest model
-    model = IsolationForest(contamination=0.05, random_state=42)
+    # Train K-means with 3 clusters (low, medium, high pressure)
+    model = KMeans(n_clusters=3, random_state=42)
     model.fit(X_scaled)
     
     # Save model and scaler
-    joblib.dump(model, 'anomaly_model.joblib')
-    joblib.dump(scaler, 'scaler.joblib')
+    joblib.dump(model, 'pressure_model.joblib')
+    joblib.dump(scaler, 'pressure_scaler.joblib')
     return model, scaler
+
+def classify_pressures(df, model, scaler):
+    """Classify wells into pressure clusters"""
+    df = df.copy()
+    numeric_cols = ['Pt (bar)', 'Pp (bar)']
+    
+    # Convert to numeric
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    X = df[numeric_cols].dropna()
+    
+    if len(X) == 0:
+        return pd.Series([-1]*len(df), index=df.index)
+    
+    # Scale and predict
+    X_scaled = scaler.transform(X)
+    clusters = model.predict(X_scaled)
+    
+    # Create series with -1 for NA values
+    cluster_series = pd.Series([-1]*len(df), index=df.index)
+    cluster_series.loc[X.index] = clusters
+    
+    return cluster_series
 
 def detect_anomalies(df, model, scaler):
     df = df.copy()
@@ -666,7 +696,7 @@ def main():
             st.header("🔧 Well Classification (HP/LP)")
             
             # Define thresholds (can be adjusted)
-            hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 7, 50, 30)
+            hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 20, 50, 30)
             
             # Ensure Pp column is numeric
             df['Pp (bar)'] = pd.to_numeric(df['Pp (bar)'], errors='coerce')
@@ -693,39 +723,92 @@ def main():
             st.header("📈 Pressure Analysis")
             plot_pressure_analysis(df)
             
-            # Anomaly Detection
-            st.header("⚠️ Anomaly Detection in WHP")
-            
+            # pressure classification using Kmeans
+            st.header("⚠️ Pressure Classification (K-means)")
             # Train or load model
-            if os.path.exists('anomaly_model.joblib') and os.path.exists('scaler.joblib'):
-                model = joblib.load('anomaly_model.joblib')
-                scaler = joblib.load('scaler.joblib')
+            if os.path.exists('pressure_model.joblib') and os.path.exists('pressure_scaler.joblib'):
+                model = joblib.load('pressure_model.joblib')
+                scaler = joblib.load('pressure_scaler.joblib')
             else:
-                model, scaler = train_anomaly_model(historical_df)
-            
-            df['Anomaly'] = detect_anomalies(df, model, scaler)
-            
-            anomaly_cols = st.columns([2, 1])
-            
-            with anomaly_cols[0]:
-                st.subheader("Anomaly Detection Results")
-                anomaly_wells = df[df['Anomaly']]
-                
-                if not anomaly_wells.empty:
-                    st.warning(f"⚠️ {len(anomaly_wells)} potential anomalies detected!")
-                    
-                    # Plot anomalies with Plotly
-                    fig = px.scatter(df, x='Pt (bar)', y='Pp (bar)', color='Anomaly',
-                                     hover_data=['Puits', 'Status', 'Q Huile Corr (Sm³/j)'],
-                                     title="Anomaly Detection in WHP vs Flowline Pressure")
-                    st.plotly_chart(fig, use_container_width=True)
+                model, scaler = train_pressure_model(historical_df)
+
+            # Classify pressures
+            df['Pressure Cluster'] = classify_pressures(df, model, scaler)
+
+            # Map cluster numbers to meaningful labels
+            cluster_labels = {
+                0: 'Low Pressure',
+                1: 'Medium Pressure', 
+                2: 'High Pressure',
+                -1: 'No Data'
+            }
+            df['Pressure Class'] = df['Pressure Cluster'].map(cluster_labels)
+
+            # Create visualization
+            st.subheader("Pressure Classification Results")
+
+            # Create figure with color by cluster and symbol by status
+            fig = px.scatter(
+                df, 
+                x='Pt (bar)', 
+                y='Pp (bar)', 
+                color='Pressure Class',
+                color_discrete_map={
+                    'Low Pressure': 'blue',
+                    'Medium Pressure': 'green',
+                    'High Pressure': 'red',
+                    'No Data': 'gray'
+                },
+                symbol='Status',  # Different markers for open/closed wells
+                symbol_map={
+                    'OPEN': 'circle',
+                    'CLOSED': 'x'
+                },
+                hover_data=['Puits', 'Q Huile Corr (Sm³/j)'],
+                title="Well Pressure Classification (K-means)"
+            )
+
+            # Add cluster centers if available
+            if model:
+                centers = scaler.inverse_transform(model.cluster_centers_)
+                fig.add_trace(
+                    go.Scatter(
+                        x=centers[:, 0],
+                        y=centers[:, 1],
+                        mode='markers',
+                        marker=dict(
+                            color='black',
+                            size=12,
+                            symbol='x-thin',
+                            line=dict(width=2)
+                        ),
+                        name='Cluster Centers'
+                    )
+                )
+
+            fig.update_layout(height=600)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Show classification summary
+            st.subheader("Classification Summary")
+            summary_cols = st.columns(2)
+
+            with summary_cols[0]:
+                st.write("📊 Pressure Class Distribution")
+                class_counts = df['Pressure Class'].value_counts()
+                st.bar_chart(class_counts)
+
+            with summary_cols[1]:
+                st.write("🏷️ Well Status by Pressure Class")
+                if 'Status' in df.columns:
+                    status_counts = df.groupby(['Pressure Class', 'Status']).size().unstack()
+                    st.bar_chart(status_counts)
                 else:
-                    st.success("No anomalies detected in today's data.")
-            
-            with anomaly_cols[1]:
-                if not anomaly_wells.empty:
-                    st.subheader("Anomaly Details")
-                    st.dataframe(anomaly_wells[['Puits', 'Pt (bar)', 'Pp (bar)', 'Status', 'Q Huile Corr (Sm³/j)']])
+                    st.warning("Status column not found in data")
+
+            # Show detailed table
+            with st.expander("View Detailed Pressure Classification"):
+                st.dataframe(df[['Puits', 'Pt (bar)', 'Pp (bar)', 'Pressure Class', 'Status', 'Q Huile Corr (Sm³/j)']])
             
             # Historical Trends and Rate Analysis
             st.header("📅 Historical Analysis")
