@@ -666,7 +666,7 @@ def main():
             st.header("🔧 Well Classification (HP/LP)")
             
             # Define thresholds (can be adjusted)
-            hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 20, 50, 30)
+            hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 7, 50, 30)
             
             # Ensure Pp column is numeric
             df['Pp (bar)'] = pd.to_numeric(df['Pp (bar)'], errors='coerce')
