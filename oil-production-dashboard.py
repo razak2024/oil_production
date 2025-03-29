@@ -571,10 +571,11 @@ def main():
     # Initialize database
     conn = init_db()
     conn.close()
-    # Clear table selection if new file is uploaded
-    if 'selected_table' in st.session_state and st.sidebar.file_uploader("Upload Production Data (Excel)", type=["xlsx", "xls"]):
-        del st.session_state.selected_table
-        del st.session_state.selected_date
+    if 'selected_table' in st.session_state:
+        if st.sidebar.button("Clear Selection Before Upload"):
+            del st.session_state.selected_table
+            del st.session_state.selected_date
+            st.rerun()
     
     st.title("🛢️ Oil Production Dashboard GTL Region")
     
