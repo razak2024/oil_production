@@ -1,8 +1,7 @@
 streamlit
-numpy
 pandas
-plotly
+numpy
 scikit-learn
 joblib
+plotly
 openpyxl
-Xlrdwriter
