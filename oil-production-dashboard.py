@@ -158,8 +158,11 @@ def reset_database():
 
 # Update the DataFrame parsing to convert date column
 def parse_excel(uploaded_file):
-    df = pd.read_excel(uploaded_file, engine='openpyxl', parse_dates=['Date'])
+    df = pd.read_excel(uploaded_file, parse_dates=['Date'])
+    
+    # Ensure consistent date format
     df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+    
     return df
 
 # Initialize database
@@ -168,7 +171,13 @@ init_db()
 # Anomaly detection model setup
 def train_anomaly_model(df):
     # Use WHP (Pt) and flowline pressure (Pp) for anomaly detection
-    X = df[['Pt (bar)', 'Pp (bar)']].dropna()
+    # Ensure all columns are numeric by converting to float
+    df = df.copy()
+    numeric_cols = ['Pt (bar)', 'Pp (bar)']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    X = df[numeric_cols].dropna()
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
@@ -182,7 +191,13 @@ def train_anomaly_model(df):
     return model, scaler
 
 def detect_anomalies(df, model, scaler):
-    X = df[['Pt (bar)', 'Pp (bar)']].dropna()
+    df = df.copy()
+    # Ensure all columns are numeric by converting to float
+    numeric_cols = ['Pt (bar)', 'Pp (bar)']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+    X = df[numeric_cols].dropna()
     if len(X) == 0:
         return pd.Series([False]*len(df), index=df.index)
     
@@ -194,6 +209,12 @@ def detect_anomalies(df, model, scaler):
 
 # Enhanced visualization functions
 def plot_production_comparison(df):
+    df = df.copy()
+    # Ensure all columns are numeric by converting to float
+    numeric_cols = ['Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     fig = make_subplots(rows=1, cols=3, subplot_titles=("Oil Production", "Gas Production", "Water Production"))
     
     # Oil production by well
@@ -221,6 +242,12 @@ def plot_production_comparison(df):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_reservoir_performance(df):
+    df = df.copy()
+    # Ensure all columns are numeric by converting to float
+    numeric_cols = ['Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 'Pp (bar)']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     res_stats = df.groupby('Réservoir').agg({
         'Q Huile Corr (Sm³/j)': 'sum',
         'Q Gaz Tot Corr (Sm³/j)': 'sum',
@@ -254,6 +281,12 @@ def plot_reservoir_performance(df):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_pressure_analysis(df):
+    df = df.copy()
+    # Ensure columns are numeric
+    numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)']
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+        
     fig = px.scatter(df, x='Pt (bar)', y='Pp (bar)', color='Réservoir',
                      hover_data=['Puits', 'Q Huile Corr (Sm³/j)'],
                      title="WHP vs Flowline Pressure Analysis")
@@ -261,6 +294,12 @@ def plot_pressure_analysis(df):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_historical_trends(historical_df, selected_well):
+    historical_df = historical_df.copy()
+    # Ensure columns are numeric
+    numeric_cols = ['Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 'Pt (bar)', 'Pp (bar)']
+    for col in numeric_cols:
+        historical_df[col] = pd.to_numeric(historical_df[col], errors='coerce')
+        
     well_data = historical_df[historical_df['Puits'] == selected_well]
     if well_data.empty:
         return
@@ -295,6 +334,13 @@ def plot_historical_trends(historical_df, selected_well):
     st.plotly_chart(fig, use_container_width=True)
 
 def plot_rate_analysis(historical_df, selected_well):
+    historical_df = historical_df.copy()
+    # Ensure columns are numeric
+    numeric_cols = ['Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 
+                   'Q Huile Test (Sm³/h)', 'Q Gaz Tot Test (Sm³/h)', 'Q Eau Tot Test (m³/h)']
+    for col in numeric_cols:
+        historical_df[col] = pd.to_numeric(historical_df[col], errors='coerce')
+        
     well_data = historical_df[historical_df['Puits'] == selected_well]
     if well_data.empty:
         return
@@ -427,6 +473,16 @@ def main():
             df['Date'] = pd.to_datetime(df['Date'])
             historical_df['Date'] = pd.to_datetime(historical_df['Date'])
             
+            # Ensure all numeric columns are properly converted
+            # Convert numeric columns
+            numeric_cols = ['Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 
+                           'Pt (bar)', 'Pp (bar)']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                if col in historical_df.columns:
+                    historical_df[col] = pd.to_numeric(historical_df[col], errors='coerce')
+            
             # Display raw data
             with st.expander("View Raw Data"):
                 st.dataframe(df)
@@ -449,14 +505,19 @@ def main():
                 gas_wells = df[df['Q Gaz Tot Corr (Sm³/j)'] > 0]
                 st.metric("Total Gas Production", f"{gas_wells['Q Gaz Tot Corr (Sm³/j)'].sum():,.0f} Sm³/d")
                 st.metric("Number of Gas Producing Wells", len(gas_wells))
-                st.metric("Average GOR", f"{gas_wells['Q Gaz Tot Corr (Sm³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():,.0f} Sm³/Sm³")
+                if not oil_wells.empty and oil_wells['Q Huile Corr (Sm³/j)'].sum() > 0:
+                    st.metric("Average GOR", f"{gas_wells['Q Gaz Tot Corr (Sm³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():,.0f} Sm³/Sm³")
                 
             with col3:
                 st.subheader("Water Production")
                 water_wells = df[df['Q Eau Tot Corr (m³/j)'] > 0]
                 st.metric("Total Water Production", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum():,.0f} m³/d")
-                st.metric("Water Cut (%)", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / (oil_wells['Q Huile Corr (Sm³/j)'].sum() + water_wells['Q Eau Tot Corr (m³/j)'].sum()) * 100:.1f}%")
-                st.metric("Average WOR", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():.2f} m³/Sm³")
+                if not oil_wells.empty and not water_wells.empty:
+                    total_fluid = oil_wells['Q Huile Corr (Sm³/j)'].sum() + water_wells['Q Eau Tot Corr (m³/j)'].sum()
+                    if total_fluid > 0:
+                        st.metric("Water Cut (%)", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / total_fluid * 100:.1f}%")
+                    if oil_wells['Q Huile Corr (Sm³/j)'].sum() > 0:
+                        st.metric("Average WOR", f"{water_wells['Q Eau Tot Corr (m³/j)'].sum() / oil_wells['Q Huile Corr (Sm³/j)'].sum():.2f} m³/Sm³")
             
             # Production comparison visualization
             st.subheader("Production Comparison by Well")
@@ -472,6 +533,8 @@ def main():
             # Define thresholds (can be adjusted)
             hp_threshold = st.slider("HP Well Threshold (Pp in bar)", 20, 50, 30)
             
+            # Ensure Pp column is numeric
+            df['Pp (bar)'] = pd.to_numeric(df['Pp (bar)'], errors='coerce')
             df['Well Class'] = np.where(df['Pp (bar)'] >= hp_threshold, 'HP', 'LP')
             
             class_cols = st.columns(2)
