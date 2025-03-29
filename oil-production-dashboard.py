@@ -576,7 +576,7 @@ def main():
         del st.session_state.selected_table
         del st.session_state.selected_date
     
-    st.title("🛢️ Enhanced Oil Production Dashboard")
+    st.title("🛢️ Oil Production Dashboard GTL Region")
     
     # Database management in sidebar
     st.sidebar.header("Database Management")
