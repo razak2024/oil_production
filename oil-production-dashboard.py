@@ -697,7 +697,7 @@ def forecast_production(historical_df, well, target_col='Q Huile Corr (Sm³/j)',
     # Remove missing values
     well_data = well_data.dropna(subset=['Date', target_col])
     
-    if len(well_data) < 30:  # Check again after removing NAs
+    if len(well_data) < 3:  # Check again after removing NAs
         return {'error': 'Insufficient data for forecasting after cleaning'}
     
     # Sort by date
