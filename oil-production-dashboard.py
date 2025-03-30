@@ -235,7 +235,10 @@ def manage_saved_data():
     if not available_dates:
         st.sidebar.info("No data in database yet")
         return None
-    
+    # Add refresh button
+    if st.sidebar.button("🔄 Refresh Date List"):
+        st.cache_data.clear()
+        st.rerun()
     # Create dropdown for date selection
     selected_date = st.sidebar.selectbox(
         "📋 Select Production Date to Load",
