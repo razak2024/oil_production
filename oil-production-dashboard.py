@@ -201,17 +201,19 @@ def load_from_db(date_filter=None):
         conn.close()
 
 # Get all available dates in the database
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner="Loading available dates...")
 def get_available_dates():
     """
     Get all unique dates available in the database
-    
     Returns:
     list: List of date strings in YYYY-MM-DD format
     """
     conn = init_db()
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM production_data")
+        cursor.fetchone()[0]  # This will change when data is updated
+        
         cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
         dates = [row[0] for row in cursor.fetchall()]
         return dates
