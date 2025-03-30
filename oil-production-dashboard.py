@@ -1426,6 +1426,17 @@ def main():
                 )
                 
                 # Update layout for multiple y-axes
+                # Add vertical line at the present date
+                current_date = pd.Timestamp.now().normalize().strftime('%Y-%m-%d')
+                fig_combined.add_vline(
+                    x=current_date, 
+                    line_dash="dash", 
+                    line_color="gray",
+                    annotation_text="Present",
+                    annotation_position="top"
+                )
+
+                # Update layout for multiple y-axes
                 fig_combined.update_layout(
                     title=f'Integrated Pressure and Production Distribution for {selected_well}',
                     xaxis_title='Date',
@@ -1458,7 +1469,7 @@ def main():
                     margin=dict(l=100, r=100),
                     height=600
                 )
-                
+
                 st.plotly_chart(fig_combined, use_container_width=True)
                 
                 # Original WHP vs Production plot (kept for reference)
