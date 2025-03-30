@@ -1,7 +1,6 @@
 streamlit
 pandas
 numpy
-sqlite3  # Included in Python standard library
 scikit-learn
 joblib
 plotly
