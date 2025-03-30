@@ -6,4 +6,4 @@ joblib
 plotly
 statsmodels
 prophet
-openpyx
+openpyxl
