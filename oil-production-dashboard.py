@@ -117,17 +117,12 @@ def init_db(df=None):
         )
         """
         
-        # Create index for faster queries
-        create_index_sql = """
-        CREATE INDEX IF NOT EXISTS idx_date_well ON production_data(Date, Puits);
-        CREATE INDEX IF NOT EXISTS idx_well ON production_data(Puits);
-        CREATE INDEX IF NOT EXISTS idx_reservoir ON production_data(Réservoir);
-        """
-        
         try:
             c.execute(create_table_sql)
-            # Create common indexes
-            c.execute(create_index_sql)
+            # Create indexes one at a time
+            c.execute("CREATE INDEX IF NOT EXISTS idx_date_well ON production_data(Date, Puits)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_well ON production_data(Puits)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_reservoir ON production_data(Réservoir)")
             conn.commit()
         except sqlite3.OperationalError as e:
             st.error(f"Error creating table: {e}")
