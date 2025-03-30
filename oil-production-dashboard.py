@@ -12,7 +12,9 @@ import joblib
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import timedelta
-
+import shutil
+import tempfile
+import os
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
 
@@ -208,8 +210,11 @@ def get_available_dates():
         return []
     finally:
         conn.close()
-# Enhanced data management function with automatic loading 
+
 def manage_saved_data():
+    """
+    Show interface for managing saved data with dropdown list and automatic loading
+    """
     st.sidebar.header("📅 Database Management")
     
     # Get all available dates
@@ -231,31 +236,52 @@ def manage_saved_data():
         key="date_dropdown"
     )
     
+    # Export/Import section
+    with st.sidebar.expander("🗄️ Database Transfer"):
+        # Export functionality
+        export_database()
+        
+        # Import functionality
+        uploaded_db = st.file_uploader(
+            "Upload database file", 
+            type=['db', 'sqlite', 'sqlite3'],
+            accept_multiple_files=False,
+            key="db_uploader"
+        )
+        
+        if uploaded_db is not None:
+            import_database(uploaded_db)
+    
     # Automatically load data for selected date
     if selected_date:
         df = load_from_db(selected_date)
         st.sidebar.success(f"✅ Loaded data for {selected_date}")
         return df
     
+    # Show data deletion interface in expandable section
     with st.sidebar.expander("🗑️ Delete Data"):
         selected_dates = st.multiselect(
             "Select dates to remove",
             options=available_dates
         )
         
-        if selected_dates and st.button("❌ Delete Selected Dates", type="primary"):
-            conn = init_db()
-            c = conn.cursor()
-            placeholders = ','.join(['?'] * len(selected_dates))
-            c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
-            deleted_rows = conn.total_changes
-            conn.commit()
-            conn.close()
-            st.success(f"Deleted {deleted_rows} records from selected dates!")
-            st.cache_data.clear()
-            st.rerun()
+        if selected_dates:
+            if st.button("❌ Delete Selected Dates", type="primary"):
+                conn = init_db()
+                c = conn.cursor()
+                
+                placeholders = ','.join(['?'] * len(selected_dates))
+                c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
+                
+                deleted_rows = conn.total_changes
+                conn.commit()
+                conn.close()
+                
+                st.success(f"Deleted {deleted_rows} records from selected dates!")
+                st.rerun()
     
     return None
+
 
 # Improved database reset function with confirmation
 def reset_database():
@@ -336,6 +362,96 @@ def save_to_db(df):
         conn.rollback()
     finally:
         conn.close()
+
+def export_database():
+    """
+    Export the SQLite database to a file for backup or transfer
+    """
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+        tmp.close()
+        tmp_path = tmp.name
+    
+    try:
+        # Connect to source and destination databases
+        src_conn = sqlite3.connect('production_data.db')
+        dst_conn = sqlite3.connect(tmp_path)
+        
+        # Backup the database
+        src_conn.backup(dst_conn)
+        
+        # Close connections
+        src_conn.close()
+        dst_conn.close()
+        
+        # Read the temporary file as bytes
+        with open(tmp_path, 'rb') as f:
+            db_bytes = f.read()
+        
+        # Create download button
+        st.sidebar.download_button(
+            label="⬇️ Export Database",
+            data=db_bytes,
+            file_name="production_data_export.db",
+            mime="application/x-sqlite3",
+            help="Download a complete copy of the current database"
+        )
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+def import_database(uploaded_file):
+    """
+    Import a database file to replace the current database
+    
+    Parameters:
+    uploaded_file: Uploaded file object from Streamlit
+    """
+    # Add confirmation to prevent accidental imports
+    confirmation = st.sidebar.text_input("Type 'CONFIRM IMPORT' to replace database:")
+    
+    if confirmation == "CONFIRM IMPORT":
+        try:
+            # Save the uploaded file to a temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+                tmp.write(uploaded_file.getvalue())
+                tmp_path = tmp.name
+            
+            # Verify the file is a valid SQLite database
+            try:
+                test_conn = sqlite3.connect(tmp_path)
+                test_conn.cursor().execute("SELECT name FROM sqlite_master WHERE type='table'")
+                test_conn.close()
+            except sqlite3.DatabaseError:
+                st.sidebar.error("Uploaded file is not a valid SQLite database")
+                return
+            
+            # Backup current database (just in case)
+            backup_path = 'production_data_backup.db'
+            if os.path.exists('production_data.db'):
+                shutil.copy2('production_data.db', backup_path)
+            
+            # Replace current database with uploaded one
+            shutil.copy2(tmp_path, 'production_data.db')
+            
+            st.sidebar.success("Database imported successfully! Backup saved as production_data_backup.db")
+            st.sidebar.info("Please refresh the page to load the new data")
+            
+            # Clear cache to force reload
+            st.cache_data.clear()
+            
+        except Exception as e:
+            st.sidebar.error(f"Error importing database: {str(e)}")
+            if os.path.exists(backup_path):
+                st.sidebar.info("Original database has been restored from backup")
+                shutil.copy2(backup_path, 'production_data.db')
+        finally:
+            # Clean up temporary files
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    elif confirmation and confirmation != "CONFIRM IMPORT":
+        st.sidebar.error("Confirmation text does not match 'CONFIRM IMPORT'")
 
 # Enhanced Excel parsing function with error handling
 def parse_excel(uploaded_file):
