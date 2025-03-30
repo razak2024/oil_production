@@ -91,41 +91,37 @@ def init_db(df=None):
         
         # If a DataFrame is provided, override with its schema
         if df is not None:
-            # Create column definitions with proper quoting
             column_defs = []
             for col in df.columns:
-                # Determine SQLite data type based on column dtype
                 if pd.api.types.is_string_dtype(df[col]):
                     col_type = 'TEXT'
                 elif pd.api.types.is_numeric_dtype(df[col]):
                     col_type = 'REAL'
                 else:
                     col_type = 'TEXT'
-                
-                # Always quote column names to handle special characters
                 quoted_col = f'"{col}"'
                 column_defs.append(f"{quoted_col} {col_type}")
         else:
-            # Use default columns
             column_defs = default_columns
         
-        # Create table with columns and improved indexing
+        # Create table with columns
         create_table_sql = f"""
         CREATE TABLE production_data (
             {', '.join(column_defs)},
-            UNIQUE(Date, Puits)  -- Add unique constraint on date and well combination
+            UNIQUE(Date, Puits)
         )
         """
         
         try:
             c.execute(create_table_sql)
-            # Create indexes one at a time
+            # Create indexes separately
             c.execute("CREATE INDEX IF NOT EXISTS idx_date_well ON production_data(Date, Puits)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_well ON production_data(Puits)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_reservoir ON production_data(Réservoir)")
             conn.commit()
         except sqlite3.OperationalError as e:
             st.error(f"Error creating table: {e}")
+            conn.rollback()
     
     return conn
 
@@ -306,16 +302,10 @@ def reset_database():
 
 # Enhanced data saving function with progress indicator
 def save_to_db(df):
-    """
-    Save DataFrame to SQLite database with duplicate checking and progress tracking
-    
-    Parameters:
-    df (pandas.DataFrame): DataFrame to save
-    """
-    # Clear any existing cache to force reload
+    """Save DataFrame to SQLite database with proper table creation"""
+    # Clear cache to force reload
     st.cache_data.clear()
     
-    # Create progress indicator
     progress_bar = st.progress(0)
     status_text = st.empty()
     status_text.text("Preparing data for saving...")
@@ -324,48 +314,49 @@ def save_to_db(df):
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     
-    # Save to database with duplicate checking
-    conn = sqlite3.connect('production_data.db')
-    
-    # Update progress
-    progress_bar.progress(25)
-    status_text.text("Checking for duplicates...")
+    # Initialize database - this will create table if needed
+    conn = init_db(df)
     
     try:
-        # Get existing dates and wells to check for duplicates
+        progress_bar.progress(25)
+        status_text.text("Checking for duplicates...")
+        
+        # Check if table exists now
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='production_data'")
+        if not c.fetchone():
+            raise Exception("Production table could not be created")
+        
+        # Get existing data
         existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
         
-        # Convert new data to same format for comparison
-        new_data = df[['Date', 'Puits']].copy()
-        new_data['Date'] = pd.to_datetime(new_data['Date']).dt.strftime('%Y-%m-%d')
-        
-        # Find duplicates (existing records with same date and well)
-        duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
-        
-        # Update progress
         progress_bar.progress(50)
         
-        if not duplicates.empty:
-            status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records (same date and well). These will be skipped.")
-            # Remove duplicates from new data before saving
-            df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
+        if not existing_data.empty:
+            # Find duplicates
+            new_data = df[['Date', 'Puits']].copy()
+            duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
+            
+            if not duplicates.empty:
+                status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records. These will be skipped.")
+                df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
         
-        # Update progress
         progress_bar.progress(75)
         status_text.text("Saving to database...")
         
-        # Use pandas to_sql with quoted column names to handle special characters
         if not df.empty:
             df.to_sql('production_data', conn, if_exists='append', index=False)
+            conn.commit()
             progress_bar.progress(100)
-            status_text.success(f"✅ Successfully saved {len(df)} new records to database!")
-            # Force refresh of the dashboard
+            status_text.success(f"✅ Successfully saved {len(df)} new records!")
             st.rerun()
         else:
             progress_bar.progress(100)
             status_text.info("No new records to save after duplicate removal.")
+            
     except Exception as e:
         status_text.error(f"Error saving to database: {str(e)}")
+        conn.rollback()
     finally:
         conn.close()
 
