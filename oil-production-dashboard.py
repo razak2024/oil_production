@@ -1041,144 +1041,6 @@ def create_performance_plots(df):
     
     return plots
 
-# Add these new functions after the existing `create_performance_plots` function
-
-def analyze_pressure_trends(historical_df, well):
-    """
-    Analyze WHP trends versus production for a specific well
-    
-    Parameters:
-    historical_df (pandas.DataFrame): Historical production data
-    well (str): Well name to analyze
-    
-    Returns:
-    plotly.graph_objects.Figure: Combined WHP vs Production plot
-    """
-    if historical_df.empty:
-        return None
-        
-    # Filter data for the selected well
-    well_data = historical_df[historical_df['Puits'] == well].copy()
-    well_data['Date'] = pd.to_datetime(well_data['Date'])
-    well_data = well_data.sort_values('Date')
-    
-    # Ensure numeric columns
-    for col in ['Pt (bar)', 'Q Huile Corr (Sm³/j)']:
-        well_data[col] = pd.to_numeric(well_data[col], errors='coerce')
-    
-    if len(well_data.dropna(subset=['Pt (bar)', 'Q Huile Corr (Sm³/j)'])) < 2:
-        return None
-    
-    # Create dual-axis plot
-    fig = go.Figure()
-    
-    # Add WHP trace
-    fig.add_trace(
-        go.Scatter(
-            x=well_data['Date'],
-            y=well_data['Pt (bar)'],
-            name='WHP (bar)',
-            line=dict(color='blue'),
-            yaxis='y1'
-        )
-    )
-    
-    # Add Oil Production trace
-    fig.add_trace(
-        go.Scatter(
-            x=well_data['Date'],
-            y=well_data['Q Huile Corr (Sm³/j)'],
-            name='Oil Production (Sm³/j)',
-            line=dict(color='green'),
-            yaxis='y2'
-        )
-    )
-    
-    # Update layout with dual axes
-    fig.update_layout(
-        title=f'WHP vs Oil Production - {well}',
-        xaxis_title='Date',
-        yaxis=dict(
-            title='WHP (bar)',
-            titlefont=dict(color='blue'),
-            tickfont=dict(color='blue')
-        ),
-        yaxis2=dict(
-            title='Oil Production (Sm³/j)',
-            titlefont=dict(color='green'),
-            tickfont=dict(color='green'),
-            overlaying='y',
-            side='right'
-        ),
-        legend=dict(
-            x=1.1,
-            y=1.0
-        )
-    )
-    
-    return fig
-
-def detect_pressure_anomalies(df, window=5, threshold=2):
-    """
-    Detect anomalies in WHP and flowline pressure using z-score method
-    
-    Parameters:
-    df (pandas.DataFrame): Production data
-    window (int): Rolling window size for calculating mean and std
-    threshold (float): Z-score threshold for anomaly detection
-    
-    Returns:
-    dict: Dictionary containing anomalies for WHP and flowline pressure
-    """
-    if df.empty:
-        return {}
-        
-    # Create a copy and ensure numeric columns
-    df = df.copy()
-    for col in ['Pt (bar)', 'Pp (bar)', 'Date']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce') if col != 'Date' else pd.to_datetime(df[col])
-    
-    anomalies = {'WHP': [], 'Flowline': []}
-    
-    # Group by well
-    for well in df['Puits'].unique():
-        well_data = df[df['Puits'] == well].sort_values('Date')
-        
-        # Calculate rolling statistics for WHP
-        if 'Pt (bar)' in well_data.columns and len(well_data['Pt (bar)'].dropna()) > window:
-            well_data['Pt_mean'] = well_data['Pt (bar)'].rolling(window=window, min_periods=1).mean()
-            well_data['Pt_std'] = well_data['Pt (bar)'].rolling(window=window, min_periods=1).std()
-            well_data['Pt_zscore'] = (well_data['Pt (bar)'] - well_data['Pt_mean']) / well_data['Pt_std']
-            
-            # Detect anomalies
-            pt_anomalies = well_data[abs(well_data['Pt_zscore']) > threshold]
-            if not pt_anomalies.empty:
-                anomalies['WHP'].append({
-                    'well': well,
-                    'dates': pt_anomalies['Date'].tolist(),
-                    'values': pt_anomalies['Pt (bar)'].tolist(),
-                    'z_scores': pt_anomalies['Pt_zscore'].tolist()
-                })
-        
-        # Calculate rolling statistics for flowline pressure
-        if 'Pp (bar)' in well_data.columns and len(well_data['Pp (bar)'].dropna()) > window:
-            well_data['Pp_mean'] = well_data['Pp (bar)'].rolling(window=window, min_periods=1).mean()
-            well_data['Pp_std'] = well_data['Pp (bar)'].rolling(window=window, min_periods=1).std()
-            well_data['Pp_zscore'] = (well_data['Pp (bar)'] - well_data['Pp_mean']) / well_data['Pp_std']
-            
-            # Detect anomalies
-            pp_anomalies = well_data[abs(well_data['Pp_zscore']) > threshold]
-            if not pp_anomalies.empty:
-                anomalies['Flowline'].append({
-                    'well': well,
-                    'dates': pp_anomalies['Date'].tolist(),
-                    'values': pp_anomalies['Pp (bar)'].tolist(),
-                    'z_scores': pp_anomalies['Pp_zscore'].tolist()
-                })
-    
-    return anomalies
-
 # Function to generate production decline plots
 def create_decline_plots(historical_df, wells=None, n_wells=5):
     """
@@ -1406,8 +1268,9 @@ def main():
         with tabs[1]:
             st.header("Well Performance Analysis")
             
-            # Pressure Classification (existing code)
+            # Pressure classification
             st.subheader("Pressure Classification")
+            
             try:
                 # Train or load pressure model
                 try:
@@ -1417,12 +1280,24 @@ def main():
                     model, scaler = train_pressure_model(df)
                 
                 if model is not None and scaler is not None:
+                    # Classify wells into pressure clusters
                     df['Pressure_Cluster'] = classify_pressures(df, model, scaler)
-                    cluster_names = {0: "Low Pressure", 1: "Medium Pressure", 2: "High Pressure", -1: "Unknown"}
+                    
+                    # Map cluster numbers to labels
+                    cluster_names = {
+                        0: "Low Pressure",
+                        1: "Medium Pressure",
+                        2: "High Pressure",
+                        -1: "Unknown"
+                    }
+                    
                     df['Pressure_Group'] = df['Pressure_Cluster'].map(cluster_names)
                     
+                    # Create pressure classification plot
                     col1, col2 = st.columns([2, 1])
+                    
                     with col1:
+                        # Scatter plot of wells by pressure
                         pressure_scatter = px.scatter(
                             df[df['Pressure_Cluster'] >= 0],
                             x='Pt (bar)',
@@ -1434,9 +1309,12 @@ def main():
                             size_max=20
                         )
                         st.plotly_chart(pressure_scatter, use_container_width=True)
+                    
                     with col2:
+                        # Count wells in each group
                         cluster_counts = df['Pressure_Group'].value_counts()
                         cluster_counts = cluster_counts[cluster_counts.index != 'Unknown']
+                        
                         pressure_pie = px.pie(
                             values=cluster_counts.values,
                             names=cluster_counts.index,
@@ -1450,74 +1328,154 @@ def main():
             except Exception as e:
                 st.error(f"Error in pressure classification: {str(e)}")
             
-            # New Pressure Trend Analysis section
-            st.subheader("Pressure Trend Analysis by Well")
+            # New: Well Pressure Trends Analysis
+            st.subheader("Well Pressure Trends vs Production")
             
-            all_wells = historical_df['Puits'].unique().tolist()
-            selected_well = st.selectbox(
-                "Select well for pressure trend analysis",
-                options=all_wells,
-                key="pressure_trend_well"
-            )
-            
-            if selected_well:
-                pressure_trend_fig = analyze_pressure_trends(historical_df, selected_well)
-                if pressure_trend_fig:
-                    st.plotly_chart(pressure_trend_fig, use_container_width=True)
-                else:
-                    st.info(f"Insufficient data for pressure trend analysis of {selected_well}")
-            
-            # New Pressure Anomaly Detection section
-            st.subheader("Pressure Anomaly Detection")
-            
-            with st.expander("Anomaly Detection Settings"):
+            if not historical_df.empty:
+                # Select well for analysis
+                well_list = historical_df['Puits'].unique().tolist()
+                selected_well = st.selectbox("Select Well for Pressure Analysis", well_list)
+                
+                # Filter data for selected well
+                well_data = historical_df[historical_df['Puits'] == selected_well].copy()
+                well_data = well_data.sort_values('Date')
+                
+                # Ensure numeric columns
+                numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)']
+                for col in numeric_cols:
+                    if col in well_data.columns:
+                        well_data[col] = pd.to_numeric(well_data[col], errors='coerce')
+                
+                # Create WHP vs Production plot
+                fig_whp = px.line(
+                    well_data,
+                    x='Date',
+                    y=['Pt (bar)', 'Q Huile Corr (Sm³/j)'],
+                    title=f'WHP and Oil Production Trend for {selected_well}',
+                    labels={'value': 'Value', 'variable': 'Parameter'},
+                    color_discrete_sequence=['#FF5733', '#3385FF']
+                )
+                fig_whp.update_layout(
+                    yaxis_title='Value',
+                    legend_title='Parameter'
+                )
+                st.plotly_chart(fig_whp, use_container_width=True)
+                
+                # Create Flowline Pressure vs Production plot
+                fig_pp = px.line(
+                    well_data,
+                    x='Date',
+                    y=['Pp (bar)', 'Q Huile Corr (Sm³/j)'],
+                    title=f'Flowline Pressure and Oil Production Trend for {selected_well}',
+                    labels={'value': 'Value', 'variable': 'Parameter'},
+                    color_discrete_sequence=['#33FF57', '#3385FF']
+                )
+                fig_pp.update_layout(
+                    yaxis_title='Value',
+                    legend_title='Parameter'
+                )
+                st.plotly_chart(fig_pp, use_container_width=True)
+                
+                # New: Pressure Anomaly Detection
+                st.subheader("Pressure Anomaly Detection")
+                
+                # Calculate rolling statistics for anomaly detection
+                window_size = 7  # 7-day rolling window
+                well_data['WHP_rolling_avg'] = well_data['Pt (bar)'].rolling(window=window_size).mean()
+                well_data['WHP_rolling_std'] = well_data['Pt (bar)'].rolling(window=window_size).std()
+                well_data['Pp_rolling_avg'] = well_data['Pp (bar)'].rolling(window=window_size).mean()
+                well_data['Pp_rolling_std'] = well_data['Pp (bar)'].rolling(window=window_size).std()
+                
+                # Define anomalies as points outside 2 standard deviations
+                well_data['WHP_anomaly'] = (
+                    (well_data['Pt (bar)'] > well_data['WHP_rolling_avg'] + 2 * well_data['WHP_rolling_std']) |
+                    (well_data['Pt (bar)'] < well_data['WHP_rolling_avg'] - 2 * well_data['WHP_rolling_std'])
+                )
+                
+                well_data['Pp_anomaly'] = (
+                    (well_data['Pp (bar)'] > well_data['Pp_rolling_avg'] + 2 * well_data['Pp_rolling_std']) |
+                    (well_data['Pp (bar)'] < well_data['Pp_rolling_avg'] - 2 * well_data['Pp_rolling_std'])
+                )
+                
+                # Create anomaly visualization
+                fig_anomalies = go.Figure()
+                
+                # Add WHP trace
+                fig_anomalies.add_trace(go.Scatter(
+                    x=well_data['Date'],
+                    y=well_data['Pt (bar)'],
+                    mode='lines',
+                    name='WHP (Pt)',
+                    line=dict(color='blue')
+                ))
+                
+                # Add WHP anomalies
+                whp_anomalies = well_data[well_data['WHP_anomaly']]
+                fig_anomalies.add_trace(go.Scatter(
+                    x=whp_anomalies['Date'],
+                    y=whp_anomalies['Pt (bar)'],
+                    mode='markers',
+                    name='WHP Anomaly',
+                    marker=dict(color='red', size=10, symbol='x')
+                ))
+                
+                # Add Flowline Pressure trace
+                fig_anomalies.add_trace(go.Scatter(
+                    x=well_data['Date'],
+                    y=well_data['Pp (bar)'],
+                    mode='lines',
+                    name='Flowline Pressure (Pp)',
+                    line=dict(color='green'),
+                    yaxis='y2'
+                ))
+                
+                # Add Flowline Pressure anomalies
+                pp_anomalies = well_data[well_data['Pp_anomaly']]
+                fig_anomalies.add_trace(go.Scatter(
+                    x=pp_anomalies['Date'],
+                    y=pp_anomalies['Pp (bar)'],
+                    mode='markers',
+                    name='Pp Anomaly',
+                    marker=dict(color='orange', size=10, symbol='x'),
+                    yaxis='y2'
+                ))
+                
+                # Update layout for dual y-axes
+                fig_anomalies.update_layout(
+                    title=f'Pressure Anomalies for {selected_well}',
+                    xaxis_title='Date',
+                    yaxis=dict(title='WHP (bar)', color='blue'),
+                    yaxis2=dict(title='Flowline Pressure (bar)', color='green', overlaying='y', side='right'),
+                    legend=dict(x=1.1)
+                )
+                
+                st.plotly_chart(fig_anomalies, use_container_width=True)
+                
+                # Display anomaly summary
                 col1, col2 = st.columns(2)
+                
                 with col1:
-                    window_size = st.slider("Rolling window size (days)", 3, 15, 5)
+                    st.metric("WHP Anomalies Detected", len(whp_anomalies))
+                    if not whp_anomalies.empty:
+                        st.write("Recent WHP anomalies:")
+                        st.dataframe(whp_anomalies[['Date', 'Pt (bar)']].sort_values('Date', ascending=False).head(5))
+                
                 with col2:
-                    z_threshold = st.slider("Z-score threshold", 1.0, 5.0, 2.0, 0.1)
+                    st.metric("Flowline Pressure Anomalies Detected", len(pp_anomalies))
+                    if not pp_anomalies.empty:
+                        st.write("Recent Flowline Pressure anomalies:")
+                        st.dataframe(pp_anomalies[['Date', 'Pp (bar)']].sort_values('Date', ascending=False).head(5))
+            else:
+                st.info("No historical data available for pressure trend analysis")
             
-            if st.button("Detect Pressure Anomalies"):
-                with st.spinner("Analyzing pressure data for anomalies..."):
-                    anomalies = detect_pressure_anomalies(historical_df, window=window_size, threshold=z_threshold)
-                    
-                    if anomalies['WHP'] or anomalies['Flowline']:
-                        # WHP Anomalies
-                        if anomalies['WHP']:
-                            st.write("### WHP (Pt) Anomalies Detected")
-                            for anomaly in anomalies['WHP']:
-                                st.write(f"**Well: {anomaly['well']}**")
-                                anomaly_df = pd.DataFrame({
-                                    'Date': anomaly['dates'],
-                                    'WHP (bar)': anomaly['values'],
-                                    'Z-Score': anomaly['z_scores']
-                                })
-                                st.dataframe(anomaly_df.style.format({
-                                    'WHP (bar)': '{:.2f}',
-                                    'Z-Score': '{:.2f}'
-                                }))
-                        
-                        # Flowline Pressure Anomalies
-                        if anomalies['Flowline']:
-                            st.write("### Flowline Pressure (Pp) Anomalies Detected")
-                            for anomaly in anomalies['Flowline']:
-                                st.write(f"**Well: {anomaly['well']}**")
-                                anomaly_df = pd.DataFrame({
-                                    'Date': anomaly['dates'],
-                                    'Flowline Pressure (bar)': anomaly['values'],
-                                    'Z-Score': anomaly['z_scores']
-                                })
-                                st.dataframe(anomaly_df.style.format({
-                                    'Flowline Pressure (bar)': '{:.2f}',
-                                    'Z-Score': '{:.2f}'
-                                }))
-                    else:
-                        st.success("No significant pressure anomalies detected")
-            
-            # Existing Well Performance Analysis
+            # Well Performance Analysis
             st.subheader("Well Performance Metrics")
+            
+            # Generate performance plots
             performance_plots = create_performance_plots(df)
+            
             if performance_plots:
+                # Display well performance plots
                 for plot_name, fig in performance_plots.items():
                     st.plotly_chart(fig, use_container_width=True)
             else:
