@@ -323,60 +323,53 @@ def reset_database():
 
 # Enhanced data saving function with progress indicator
 def save_to_db(df):
-    """
-    Save DataFrame to SQLite database with duplicate checking and progress tracking
-    
-    Parameters:
-    df (pandas.DataFrame): DataFrame to save
-    """
-    # Create progress indicator
+    """Save DataFrame to SQLite database with refresh"""
+    # Initialize progress
     progress_bar = st.progress(0)
     status_text = st.empty()
     status_text.text("Preparing data for saving...")
     
     # Ensure date is parsed correctly
     if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
+        try:
+            df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
+        except:
+            st.error("Invalid date format in Excel file. Use DD/MM/YYYY")
+            return False
+
+    # Initialize database (ensures table exists)
+    init_db(df)  # Pass the DataFrame to ensure proper schema
     
-    # Save to database with duplicate checking
+    # Save to database
     conn = sqlite3.connect('production_data.db')
-    
-    # Update progress
-    progress_bar.progress(25)
-    status_text.text("Checking for duplicates...")
-    
-    # Get existing dates and wells to check for duplicates
-    existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
-    
-    # Convert new data to same format for comparison
-    new_data = df[['Date', 'Puits']].copy()
-    new_data['Date'] = pd.to_datetime(new_data['Date']).dt.strftime('%Y-%m-%d')
-    
-    # Find duplicates (existing records with same date and well)
-    duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
-    
-    # Update progress
-    progress_bar.progress(50)
-    
-    if not duplicates.empty:
-        status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records (same date and well). These will be skipped.")
-        # Remove duplicates from new data before saving
-        df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
-    
-    # Update progress
-    progress_bar.progress(75)
-    status_text.text("Saving to database...")
-    
-    # Use pandas to_sql with quoted column names to handle special characters
-    if not df.empty:
-        df.to_sql('production_data', conn, if_exists='append', index=False)
-        progress_bar.progress(100)
-        status_text.success(f"✅ Successfully saved {len(df)} new records to database!")
-    else:
-        progress_bar.progress(100)
-        status_text.info("No new records to save after duplicate removal.")
-    
-    conn.close()
+    try:
+        # Check for duplicates
+        existing = pd.read_sql('SELECT Date, Puits FROM production_data', conn)
+        new_data = df[['Date', 'Puits']].copy()
+        duplicates = pd.merge(existing, new_data, on=['Date', 'Puits'], how='inner')
+        
+        if not duplicates.empty:
+            st.warning(f"Skipping {len(duplicates)} duplicate records")
+            df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
+
+        # Save new records
+        if not df.empty:
+            df.to_sql('production_data', conn, if_exists='append', index=False)
+            st.success(f"Saved {len(df)} new records!")
+            
+            # Clear cache and refresh to show new data
+            st.cache_data.clear()
+            st.rerun()
+            return True
+        else:
+            st.info("No new records to save")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error saving to database: {str(e)}")
+        return False
+    finally:
+        conn.close()
 
 # Enhanced Excel parsing function with error handling
 def parse_excel(uploaded_file):
