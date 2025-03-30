@@ -235,10 +235,12 @@ def manage_saved_data():
     if not available_dates:
         st.sidebar.info("No data in database yet")
         return None
+    
     # Add refresh button
     if st.sidebar.button("🔄 Refresh Date List"):
         st.cache_data.clear()
         st.rerun()
+    
     # Create dropdown for date selection
     selected_date = st.sidebar.selectbox(
         "📋 Select Production Date to Load",
@@ -246,14 +248,26 @@ def manage_saved_data():
         key="date_dropdown"
     )
     
+    # Export/Import section
+    with st.sidebar.expander("🗄️ Database Transfer"):
+        # Export functionality
+        export_database()
+        
+        # Import functionality
+        uploaded_db = st.file_uploader(
+            "Upload database file", 
+            type=['db', 'sqlite', 'sqlite3'],
+            accept_multiple_files=False,
+            key="db_uploader"
+        )
+        
+        if uploaded_db is not None:
+            import_database(uploaded_db)
+    
     # Automatically load data for selected date
     if selected_date:
         df = load_from_db(selected_date)
-        
-        # Show loading confirmation
         st.sidebar.success(f"✅ Loaded data for {selected_date}")
-        
-        # Return the loaded data
         return df
     
     # Show data deletion interface in expandable section
@@ -264,12 +278,10 @@ def manage_saved_data():
         )
         
         if selected_dates:
-            # Add delete button
             if st.button("❌ Delete Selected Dates", type="primary"):
                 conn = init_db()
                 c = conn.cursor()
                 
-                # Delete records
                 placeholders = ','.join(['?'] * len(selected_dates))
                 c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
                 
