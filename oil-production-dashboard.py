@@ -312,6 +312,9 @@ def save_to_db(df):
     Parameters:
     df (pandas.DataFrame): DataFrame to save
     """
+    # Clear any existing cache to force reload
+    st.cache_data.clear()
+    
     # Create progress indicator
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -319,7 +322,7 @@ def save_to_db(df):
     
     # Ensure date is parsed correctly
     if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
     
     # Save to database with duplicate checking
     conn = sqlite3.connect('production_data.db')
@@ -328,38 +331,43 @@ def save_to_db(df):
     progress_bar.progress(25)
     status_text.text("Checking for duplicates...")
     
-    # Get existing dates and wells to check for duplicates
-    existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
-    
-    # Convert new data to same format for comparison
-    new_data = df[['Date', 'Puits']].copy()
-    new_data['Date'] = pd.to_datetime(new_data['Date']).dt.strftime('%Y-%m-%d')
-    
-    # Find duplicates (existing records with same date and well)
-    duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
-    
-    # Update progress
-    progress_bar.progress(50)
-    
-    if not duplicates.empty:
-        status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records (same date and well). These will be skipped.")
-        # Remove duplicates from new data before saving
-        df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
-    
-    # Update progress
-    progress_bar.progress(75)
-    status_text.text("Saving to database...")
-    
-    # Use pandas to_sql with quoted column names to handle special characters
-    if not df.empty:
-        df.to_sql('production_data', conn, if_exists='append', index=False)
-        progress_bar.progress(100)
-        status_text.success(f"✅ Successfully saved {len(df)} new records to database!")
-    else:
-        progress_bar.progress(100)
-        status_text.info("No new records to save after duplicate removal.")
-    
-    conn.close()
+    try:
+        # Get existing dates and wells to check for duplicates
+        existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
+        
+        # Convert new data to same format for comparison
+        new_data = df[['Date', 'Puits']].copy()
+        new_data['Date'] = pd.to_datetime(new_data['Date']).dt.strftime('%Y-%m-%d')
+        
+        # Find duplicates (existing records with same date and well)
+        duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
+        
+        # Update progress
+        progress_bar.progress(50)
+        
+        if not duplicates.empty:
+            status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records (same date and well). These will be skipped.")
+            # Remove duplicates from new data before saving
+            df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
+        
+        # Update progress
+        progress_bar.progress(75)
+        status_text.text("Saving to database...")
+        
+        # Use pandas to_sql with quoted column names to handle special characters
+        if not df.empty:
+            df.to_sql('production_data', conn, if_exists='append', index=False)
+            progress_bar.progress(100)
+            status_text.success(f"✅ Successfully saved {len(df)} new records to database!")
+            # Force refresh of the dashboard
+            st.rerun()
+        else:
+            progress_bar.progress(100)
+            status_text.info("No new records to save after duplicate removal.")
+    except Exception as e:
+        status_text.error(f"Error saving to database: {str(e)}")
+    finally:
+        conn.close()
 
 # Enhanced Excel parsing function with error handling
 def parse_excel(uploaded_file):
@@ -1168,7 +1176,7 @@ def main():
                     # Save to database
                     if st.button("Save to Database", type="primary"):
                         save_to_db(df)
-                        st.success("Data saved successfully!")
+                        # No need for st.success here - it's handled in save_to_db()
         
         # Database tab
         with sidebar_tabs[1]:
