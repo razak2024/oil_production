@@ -135,7 +135,6 @@ def init_db(df=None):
     return conn
 
 # Improved data loading function with caching for better performance
-# Improved data loading function with caching for better performance
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_from_db(date_filter=None):
     """
@@ -202,17 +201,19 @@ def load_from_db(date_filter=None):
         conn.close()
 
 # Get all available dates in the database
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner="Loading available dates...")
 def get_available_dates():
     """
     Get all unique dates available in the database
-    
     Returns:
     list: List of date strings in YYYY-MM-DD format
     """
     conn = init_db()
     try:
         cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM production_data")
+        cursor.fetchone()[0]  # This will change when data is updated
+        
         cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
         dates = [row[0] for row in cursor.fetchall()]
         return dates
@@ -234,7 +235,10 @@ def manage_saved_data():
     if not available_dates:
         st.sidebar.info("No data in database yet")
         return None
-    
+    # Add refresh button
+    if st.sidebar.button("🔄 Refresh Date List"):
+        st.cache_data.clear()
+        st.rerun()
     # Create dropdown for date selection
     selected_date = st.sidebar.selectbox(
         "📋 Select Production Date to Load",
@@ -1209,7 +1213,6 @@ def main():
             "🔍 Well Analysis", 
             "📈 Production Trends", 
             "🔮 Forecasting", 
-            "💧 Well Washing",
             "📋 Data View"
         ])
         
@@ -1331,9 +1334,8 @@ def main():
                 st.error(f"Error in pressure classification: {str(e)}")
             
             # New: Well Pressure Trends Analysis
-            # Enhanced Well Pressure Trends vs Production section
             st.subheader("Well Pressure Trends vs Production")
-
+            
             if not historical_df.empty:
                 # Select well for analysis
                 well_list = historical_df['Puits'].unique().tolist()
@@ -1344,17 +1346,67 @@ def main():
                 well_data = well_data.sort_values('Date')
                 
                 # Ensure numeric columns
-                numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 
-                                'Q Gaz Tot Corr (Sm³/j)', 'Duse (mm)']
+                numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)']
                 for col in numeric_cols:
                     if col in well_data.columns:
                         well_data[col] = pd.to_numeric(well_data[col], errors='coerce')
                 
-                # Create integrated pressure and production distribution plot
-                fig_combined = go.Figure()
+                # Create WHP vs Production plot
+                fig_whp = px.line(
+                    well_data,
+                    x='Date',
+                    y=['Pt (bar)', 'Q Huile Corr (Sm³/j)'],
+                    title=f'WHP and Oil Production Trend for {selected_well}',
+                    labels={'value': 'Value', 'variable': 'Parameter'},
+                    color_discrete_sequence=['#FF5733', '#3385FF']
+                )
+                fig_whp.update_layout(
+                    yaxis_title='Value',
+                    legend_title='Parameter'
+                )
+                st.plotly_chart(fig_whp, use_container_width=True)
+                
+                # Create Flowline Pressure vs Production plot
+                fig_pp = px.line(
+                    well_data,
+                    x='Date',
+                    y=['Pp (bar)', 'Q Huile Corr (Sm³/j)'],
+                    title=f'Flowline Pressure and Oil Production Trend for {selected_well}',
+                    labels={'value': 'Value', 'variable': 'Parameter'},
+                    color_discrete_sequence=['#33FF57', '#3385FF']
+                )
+                fig_pp.update_layout(
+                    yaxis_title='Value',
+                    legend_title='Parameter'
+                )
+                st.plotly_chart(fig_pp, use_container_width=True)
+                
+                # New: Pressure Anomaly Detection
+                st.subheader("Pressure Anomaly Detection")
+                
+                # Calculate rolling statistics for anomaly detection
+                window_size = 7  # 7-day rolling window
+                well_data['WHP_rolling_avg'] = well_data['Pt (bar)'].rolling(window=window_size).mean()
+                well_data['WHP_rolling_std'] = well_data['Pt (bar)'].rolling(window=window_size).std()
+                well_data['Pp_rolling_avg'] = well_data['Pp (bar)'].rolling(window=window_size).mean()
+                well_data['Pp_rolling_std'] = well_data['Pp (bar)'].rolling(window=window_size).std()
+                
+                # Define anomalies as points outside 2 standard deviations
+                well_data['WHP_anomaly'] = (
+                    (well_data['Pt (bar)'] > well_data['WHP_rolling_avg'] + 2 * well_data['WHP_rolling_std']) |
+                    (well_data['Pt (bar)'] < well_data['WHP_rolling_avg'] - 2 * well_data['WHP_rolling_std'])
+                )
+                
+                well_data['Pp_anomaly'] = (
+                    (well_data['Pp (bar)'] > well_data['Pp_rolling_avg'] + 2 * well_data['Pp_rolling_std']) |
+                    (well_data['Pp (bar)'] < well_data['Pp_rolling_avg'] - 2 * well_data['Pp_rolling_std'])
+                )
+                
+                # Create anomaly visualization
+                fig_anomalies = go.Figure()
                 
                 # Add WHP trace
-                fig_combined.add_trace(go.Scatter(
+                fig_anomalies.add_trace(go.Scatter(
                     x=well_data['Date'],
                     y=well_data['Pt (bar)'],
                     mode='lines',
@@ -1362,134 +1414,77 @@ def main():
                     line=dict(color='blue')
                 ))
                 
+                # Add WHP anomalies
+                whp_anomalies = well_data[well_data['WHP_anomaly']]
+                fig_anomalies.add_trace(go.Scatter(
+                    x=whp_anomalies['Date'],
+                    y=whp_anomalies['Pt (bar)'],
+                    mode='markers',
+                    name='WHP Anomaly',
+                    marker=dict(color='red', size=10, symbol='x')
+                ))
+                
                 # Add Flowline Pressure trace
-                fig_combined.add_trace(go.Scatter(
+                fig_anomalies.add_trace(go.Scatter(
                     x=well_data['Date'],
                     y=well_data['Pp (bar)'],
                     mode='lines',
                     name='Flowline Pressure (Pp)',
-                    line=dict(color='green')
-                ))
-                
-                # Add Oil Production trace (secondary y-axis)
-                fig_combined.add_trace(go.Scatter(
-                    x=well_data['Date'],
-                    y=well_data['Q Huile Corr (Sm³/j)'],
-                    mode='lines',
-                    name='Oil Production',
-                    line=dict(color='red', dash='dash'),
+                    line=dict(color='green'),
                     yaxis='y2'
                 ))
                 
-                # Add Water Production trace (secondary y-axis)
-                fig_combined.add_trace(go.Scatter(
-                    x=well_data['Date'],
-                    y=well_data['Q Eau Tot Corr (m³/j)'],
-                    mode='lines',
-                    name='Water Production',
-                    line=dict(color='cyan', dash='dash'),
+                # Add Flowline Pressure anomalies
+                pp_anomalies = well_data[well_data['Pp_anomaly']]
+                fig_anomalies.add_trace(go.Scatter(
+                    x=pp_anomalies['Date'],
+                    y=pp_anomalies['Pp (bar)'],
+                    mode='markers',
+                    name='Pp Anomaly',
+                    marker=dict(color='orange', size=10, symbol='x'),
                     yaxis='y2'
                 ))
                 
-                # Add Gas Production trace (secondary y-axis)
-                fig_combined.add_trace(go.Scatter(
-                    x=well_data['Date'],
-                    y=well_data['Q Gaz Tot Corr (Sm³/j)'],
-                    mode='lines',
-                    name='Gas Production',
-                    line=dict(color='orange', dash='dash'),
-                    yaxis='y3'
-                ))
-                
-                # Add Choke Size trace (secondary y-axis)
-                fig_combined.add_trace(go.Scatter(
-                    x=well_data['Date'],
-                    y=well_data['Duse (mm)'],
-                    mode='lines',
-                    name='Choke Size',
-                    line=dict(color='purple', dash='dashdot'),
-                    yaxis='y4'
-                ))
-                
-                # Add vertical lines at the present date
-                current_date = pd.Timestamp.now().normalize()
-                fig_combined.add_vline(
-                    x=current_date, 
-                    line_dash="dash", 
-                    line_color="gray",
-                    annotation_text="Present",
-                    annotation_position="top"
-                )
-                
-                # Update layout for multiple y-axes
-                fig_combined.update_layout(
-                    title=f'Integrated Pressure and Production Distribution for {selected_well}',
+                # Update layout for dual y-axes
+                fig_anomalies.update_layout(
+                    title=f'Pressure Anomalies for {selected_well}',
                     xaxis_title='Date',
-                    yaxis=dict(title='Pressure (bar)', color='blue'),
-                    yaxis2=dict(
-                        title='Liquid Production (m³/j)',
-                        color='red',
-                        overlaying='y',
-                        side='right',
-                        anchor='free',
-                        position=0.85
-                    ),
-                    yaxis3=dict(
-                        title='Gas Production (Sm³/j)',
-                        color='orange',
-                        overlaying='y',
-                        side='right',
-                        anchor='x',
-                        position=0.95
-                    ),
-                    yaxis4=dict(
-                        title='Choke Size (mm)',
-                        color='purple',
-                        overlaying='y',
-                        side='left',
-                        anchor='free',
-                        position=0.05
-                    ),
-                    legend=dict(orientation='h', y=-0.2),
-                    margin=dict(l=100, r=100),
-                    height=600
+                    yaxis=dict(title='WHP (bar)', color='blue'),
+                    yaxis2=dict(title='Flowline Pressure (bar)', color='green', overlaying='y', side='right'),
+                    legend=dict(x=1.1)
                 )
                 
-                st.plotly_chart(fig_combined, use_container_width=True)
+                st.plotly_chart(fig_anomalies, use_container_width=True)
                 
-                # Original WHP vs Production plot (kept for reference)
-                st.subheader("Individual Trend Charts")
-                with st.expander("Show Individual Trend Charts"):
-                    fig_whp = px.line(
-                        well_data,
-                        x='Date',
-                        y=['Pt (bar)', 'Q Huile Corr (Sm³/j)'],
-                        title=f'WHP and Oil Production Trend for {selected_well}',
-                        labels={'value': 'Value', 'variable': 'Parameter'},
-                        color_discrete_sequence=['#FF5733', '#3385FF']
-                    )
-                    fig_whp.update_layout(
-                        yaxis_title='Value',
-                        legend_title='Parameter'
-                    )
-                    st.plotly_chart(fig_whp, use_container_width=True)
-                    
-                    # Create Flowline Pressure vs Production plot
-                    fig_pp = px.line(
-                        well_data,
-                        x='Date',
-                        y=['Pp (bar)', 'Q Huile Corr (Sm³/j)'],
-                        title=f'Flowline Pressure and Oil Production Trend for {selected_well}',
-                        labels={'value': 'Value', 'variable': 'Parameter'},
-                        color_discrete_sequence=['#33FF57', '#3385FF']
-                    )
-                    fig_pp.update_layout(
-                        yaxis_title='Value',
-                        legend_title='Parameter'
-                    )
-                    st.plotly_chart(fig_pp, use_container_width=True)
+                # Display anomaly summary
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.metric("WHP Anomalies Detected", len(whp_anomalies))
+                    if not whp_anomalies.empty:
+                        st.write("Recent WHP anomalies:")
+                        st.dataframe(whp_anomalies[['Date', 'Pt (bar)']].sort_values('Date', ascending=False).head(5))
+                
+                with col2:
+                    st.metric("Flowline Pressure Anomalies Detected", len(pp_anomalies))
+                    if not pp_anomalies.empty:
+                        st.write("Recent Flowline Pressure anomalies:")
+                        st.dataframe(pp_anomalies[['Date', 'Pp (bar)']].sort_values('Date', ascending=False).head(5))
             else:
                 st.info("No historical data available for pressure trend analysis")
+            
+            # Well Performance Analysis
+            st.subheader("Well Performance Metrics")
+            
+            # Generate performance plots
+            performance_plots = create_performance_plots(df)
+            
+            if performance_plots:
+                # Display well performance plots
+                for plot_name, fig in performance_plots.items():
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Insufficient data for performance analysis")
         
         # Production Trends Tab
         with tabs[2]:
@@ -1662,274 +1657,8 @@ def main():
             else:
                 st.info("No wells available for forecasting")
         
-        # Well Washing Tab
-        with tabs[4]:
-            st.header("Well Washing Analysis and MAP")
-            
-            if not historical_df.empty:
-                # Add well selection dropdown
-                washing_wells = historical_df['Puits'].unique().tolist()
-                selected_washing_well = st.selectbox(
-                    "Select Well for Washing Analysis",
-                    options=washing_wells,
-                    key="washing_well_select"
-                )
-                
-                # Filter data for selected well
-                well_washing_data = historical_df[historical_df['Puits'] == selected_washing_well].copy()
-                well_washing_data = well_washing_data.sort_values('Date')
-                
-                # Calculate MAP (manque à produire) if necessary columns exist
-                if all(col in well_washing_data.columns for col in ['MAP (Sm³/j)', 'Q Huile Corr (Sm³/j)']):
-                    # Ensure numeric columns
-                    numeric_wash_cols = ['MAP (Sm³/j)', 'Q Huile Corr (Sm³/j)', 'Heures de marche']
-                    for col in numeric_wash_cols:
-                        if col in well_washing_data.columns:
-                            well_washing_data[col] = pd.to_numeric(well_washing_data[col], errors='coerce')
-                    
-                    # Create two columns for metrics and controls
-                    map_col1, map_col2 = st.columns([2, 1])
-                    
-                    with map_col2:
-                        st.subheader("MAP Statistics")
-                        # Calculate key MAP metrics
-                        avg_map = well_washing_data['MAP (Sm³/j)'].mean()
-                        max_map = well_washing_data['MAP (Sm³/j)'].max()
-                        total_map = well_washing_data['MAP (Sm³/j)'].sum()
-                        
-                        # Display metrics
-                        st.metric("Average MAP", f"{avg_map:.2f} Sm³/j")
-                        st.metric("Maximum MAP", f"{max_map:.2f} Sm³/j")
-                        st.metric("Cumulative MAP", f"{total_map:.2f} Sm³")
-                        
-                        # Calculate production loss percentage
-                        avg_production = well_washing_data['Q Huile Corr (Sm³/j)'].mean()
-                        if avg_production > 0:
-                            loss_percentage = (avg_map / (avg_production + avg_map)) * 100
-                            st.metric("Production Loss", f"{loss_percentage:.1f}%")
-                        
-                        # Add date range filter
-                        st.subheader("Date Range")
-                        min_date = well_washing_data['Date'].min().date()
-                        max_date = well_washing_data['Date'].max().date()
-                        
-                        start_date = st.date_input(
-                            "Start Date",
-                            value=min_date,
-                            min_value=min_date,
-                            max_value=max_date
-                        )
-                        
-                        end_date = st.date_input(
-                            "End Date",
-                            value=max_date,
-                            min_value=min_date,
-                            max_value=max_date
-                        )
-                    
-                    # Filter data based on date range
-                    mask = (well_washing_data['Date'].dt.date >= start_date) & (well_washing_data['Date'].dt.date <= end_date)
-                    filtered_washing_data = well_washing_data.loc[mask]
-                    
-                    with map_col1:
-                        # Create MAP visualization
-                        fig_map = go.Figure()
-                        
-                        # Add production trace
-                        fig_map.add_trace(go.Scatter(
-                            x=filtered_washing_data['Date'],
-                            y=filtered_washing_data['Q Huile Corr (Sm³/j)'],
-                            mode='lines',
-                            name='Oil Production',
-                            line=dict(color='green')
-                        ))
-                        
-                        # Add MAP trace
-                        fig_map.add_trace(go.Scatter(
-                            x=filtered_washing_data['Date'],
-                            y=filtered_washing_data['MAP (Sm³/j)'],
-                            mode='lines',
-                            name='MAP (Production Loss)',
-                            line=dict(color='red')
-                        ))
-                        
-                        # Add area for total potential production
-                        fig_map.add_trace(go.Scatter(
-                            x=filtered_washing_data['Date'],
-                            y=filtered_washing_data['MAP (Sm³/j)'] + filtered_washing_data['Q Huile Corr (Sm³/j)'],
-                            mode='lines',
-                            name='Potential Production',
-                            line=dict(color='blue', dash='dash')
-                        ))
-                        
-                        # Add runtime hours on secondary axis
-                        fig_map.add_trace(go.Scatter(
-                            x=filtered_washing_data['Date'],
-                            y=filtered_washing_data['Heures de marche'],
-                            mode='lines',
-                            name='Runtime Hours',
-                            line=dict(color='purple'),
-                            yaxis='y2'
-                        ))
-                        
-                        # Update layout
-                        fig_map.update_layout(
-                            title=f'Production Loss Analysis for {selected_washing_well}',
-                            xaxis_title='Date',
-                            yaxis_title='Production Rate (Sm³/j)',
-                            yaxis2=dict(
-                                title='Runtime Hours',
-                                overlaying='y',
-                                side='right',
-                                range=[0, 24]
-                            ),
-                            legend=dict(orientation='h', y=-0.2)
-                        )
-                        
-                        st.plotly_chart(fig_map, use_container_width=True)
-                    
-                    # Washing events detection
-                    st.subheader("Washing Events Detection")
-                    
-                    # Prepare data for washing events detection
-                    well_washing_data['Production_Drop'] = well_washing_data['Q Huile Corr (Sm³/j)'].pct_change().fillna(0)
-                    well_washing_data['MAP_Spike'] = well_washing_data['MAP (Sm³/j)'].pct_change().fillna(0)
-                    
-                    # Detect potential washing events (significant production drop followed by recovery)
-                    threshold = -0.15  # 15% drop in production
-                    
-                    # Find days with significant production drops
-                    potential_washing_days = well_washing_data[well_washing_data['Production_Drop'] <= threshold].copy()
-                    
-                    if not potential_washing_days.empty:
-                        # Look for recovery within 7 days after each drop
-                        washing_events = []
-                        
-                        for idx, row in potential_washing_days.iterrows():
-                            event_date = row['Date']
-                            
-                            # Get data for 7 days after the event
-                            after_event = well_washing_data[
-                                (well_washing_data['Date'] > event_date) & 
-                                (well_washing_data['Date'] <= event_date + pd.Timedelta(days=7))
-                            ]
-                            
-                            if not after_event.empty:
-                                # Check if production recovered
-                                max_recovery = after_event['Q Huile Corr (Sm³/j)'].max()
-                                
-                                if max_recovery > row['Q Huile Corr (Sm³/j)']:
-                                    recovery_pct = (max_recovery - row['Q Huile Corr (Sm³/j)']) / row['Q Huile Corr (Sm³/j)'] * 100
-                                    
-                                    # Only include events with significant recovery
-                                    if recovery_pct > 10:  # 10% recovery
-                                        recovery_date = after_event.loc[after_event['Q Huile Corr (Sm³/j)'].idxmax(), 'Date']
-                                        recovery_days = (recovery_date - event_date).days
-                                        
-                                        washing_events.append({
-                                            'Event Date': event_date,
-                                            'Recovery Date': recovery_date,
-                                            'Production Before': row['Q Huile Corr (Sm³/j)'],
-                                            'Production After': max_recovery,
-                                            'Recovery %': recovery_pct,
-                                            'Recovery Days': recovery_days,
-                                            'MAP During Event': after_event['MAP (Sm³/j)'].mean()
-                                        })
-                        
-                        if washing_events:
-                            # Create DataFrame of washing events
-                            washing_df = pd.DataFrame(washing_events)
-                            
-                            # Display washing events
-                            st.write(f"Detected {len(washing_events)} potential washing events:")
-                            st.dataframe(washing_df.style.format({
-                                'Production Before': '{:.2f}',
-                                'Production After': '{:.2f}',
-                                'Recovery %': '{:.1f}%',
-                                'MAP During Event': '{:.2f}'
-                            }))
-                            
-                            # Create washing events visualization
-                            fig_washings = go.Figure()
-                            
-                            # Add production line
-                            fig_washings.add_trace(go.Scatter(
-                                x=filtered_washing_data['Date'],
-                                y=filtered_washing_data['Q Huile Corr (Sm³/j)'],
-                                mode='lines',
-                                name='Oil Production',
-                                line=dict(color='green')
-                            ))
-                            
-                            # Add markers for washing events
-                            event_dates = [event['Event Date'] for event in washing_events 
-                                          if start_date <= event['Event Date'].date() <= end_date]
-                            event_productions = [filtered_washing_data.loc[filtered_washing_data['Date'] == date, 'Q Huile Corr (Sm³/j)'].values[0] 
-                                                if not filtered_washing_data.loc[filtered_washing_data['Date'] == date, 'Q Huile Corr (Sm³/j)'].empty 
-                                                else 0 
-                                                for date in event_dates]
-                            
-                            if event_dates:
-                                fig_washings.add_trace(go.Scatter(
-                                    x=event_dates,
-                                    y=event_productions,
-                                    mode='markers',
-                                    name='Washing Events',
-                                    marker=dict(
-                                        color='red',
-                                        size=12,
-                                        symbol='triangle-down'
-                                    )
-                                ))
-                            
-                            # Update layout
-                            fig_washings.update_layout(
-                                title=f'Detected Washing Events for {selected_washing_well}',
-                                xaxis_title='Date',
-                                yaxis_title='Oil Production (Sm³/j)',
-                                legend=dict(orientation='h', y=-0.2)
-                            )
-                            
-                            st.plotly_chart(fig_washings, use_container_width=True)
-                            
-                            # Calculate washing effectiveness
-                            st.subheader("Washing Effectiveness Analysis")
-                            
-                            # Calculate average metrics
-                            avg_recovery_pct = washing_df['Recovery %'].mean()
-                            avg_recovery_days = washing_df['Recovery Days'].mean()
-                            avg_production_gain = (washing_df['Production After'] - washing_df['Production Before']).mean()
-                            
-                            # Display metrics in columns
-                            eff_col1, eff_col2, eff_col3 = st.columns(3)
-                            
-                            with eff_col1:
-                                st.metric("Average Recovery", f"{avg_recovery_pct:.1f}%")
-                            
-                            with eff_col2:
-                                st.metric("Average Recovery Time", f"{avg_recovery_days:.1f} days")
-                            
-                            with eff_col3:
-                                st.metric("Average Production Gain", f"{avg_production_gain:.2f} Sm³/j")
-                            
-                            # Calculate estimated production gain
-                            total_gain = sum([(event['Production After'] - event['Production Before']) * 
-                                              min(30, (end_date - event['Event Date'].date()).days) 
-                                              for event in washing_events 
-                                              if start_date <= event['Event Date'].date() <= end_date])
-                            
-                            st.metric("Estimated Total Production Gain", f"{total_gain:.2f} Sm³")
-                        else:
-                            st.info("No washing events detected based on production patterns")
-                    else:
-                        st.info("No significant production drops detected for washing analysis")
-                else:
-                    st.warning("Missing required data columns for MAP and washing analysis")
-            else:
-                st.info("No historical data available for washing analysis")
-
         # Data View Tab
-        with tabs[5]:
+        with tabs[4]:
             st.header("Raw Data View")
             
             if not df.empty:
