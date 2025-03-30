@@ -194,16 +194,12 @@ def load_from_db(date_filter=None):
 # Get all available dates in the database
 @st.cache_data(ttl=300, show_spinner="Loading available dates...")
 def get_available_dates():
-    """
-    Get all unique dates available in the database
-    Returns:
-    list: List of date strings in YYYY-MM-DD format
-    """
     conn = init_db()
     try:
         cursor = conn.cursor()
+        # Force a fresh count to invalidate cache when data changes
         cursor.execute("SELECT COUNT(*) FROM production_data")
-        cursor.fetchone()[0]  # This will change when data is updated
+        cursor.fetchone()[0]
         
         cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
         dates = [row[0] for row in cursor.fetchall()]
@@ -212,12 +208,8 @@ def get_available_dates():
         return []
     finally:
         conn.close()
-
 # Enhanced data management function with automatic loading 
 def manage_saved_data():
-    """
-    Show interface for managing saved data with dropdown list and automatic loading
-    """
     st.sidebar.header("📅 Database Management")
     
     # Get all available dates
@@ -226,10 +218,12 @@ def manage_saved_data():
     if not available_dates:
         st.sidebar.info("No data in database yet")
         return None
+    
     # Add refresh button
     if st.sidebar.button("🔄 Refresh Date List"):
         st.cache_data.clear()
         st.rerun()
+    
     # Create dropdown for date selection
     selected_date = st.sidebar.selectbox(
         "📋 Select Production Date to Load",
@@ -240,36 +234,26 @@ def manage_saved_data():
     # Automatically load data for selected date
     if selected_date:
         df = load_from_db(selected_date)
-        
-        # Show loading confirmation
         st.sidebar.success(f"✅ Loaded data for {selected_date}")
-        
-        # Return the loaded data
         return df
     
-    # Show data deletion interface in expandable section
     with st.sidebar.expander("🗑️ Delete Data"):
         selected_dates = st.multiselect(
             "Select dates to remove",
             options=available_dates
         )
         
-        if selected_dates:
-            # Add delete button
-            if st.button("❌ Delete Selected Dates", type="primary"):
-                conn = init_db()
-                c = conn.cursor()
-                
-                # Delete records
-                placeholders = ','.join(['?'] * len(selected_dates))
-                c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
-                
-                deleted_rows = conn.total_changes
-                conn.commit()
-                conn.close()
-                
-                st.success(f"Deleted {deleted_rows} records from selected dates!")
-                st.rerun()
+        if selected_dates and st.button("❌ Delete Selected Dates", type="primary"):
+            conn = init_db()
+            c = conn.cursor()
+            placeholders = ','.join(['?'] * len(selected_dates))
+            c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
+            deleted_rows = conn.total_changes
+            conn.commit()
+            conn.close()
+            st.success(f"Deleted {deleted_rows} records from selected dates!")
+            st.cache_data.clear()
+            st.rerun()
     
     return None
 
@@ -302,38 +286,29 @@ def reset_database():
 
 # Enhanced data saving function with progress indicator
 def save_to_db(df):
-    """Save DataFrame to SQLite database with proper table creation"""
-    # Clear cache to force reload
-    st.cache_data.clear()
-    
     progress_bar = st.progress(0)
     status_text = st.empty()
     status_text.text("Preparing data for saving...")
-    
-    # Ensure date is parsed correctly
+
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
-    
-    # Initialize database - this will create table if needed
+
     conn = init_db(df)
     
     try:
         progress_bar.progress(25)
         status_text.text("Checking for duplicates...")
         
-        # Check if table exists now
         c = conn.cursor()
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='production_data'")
         if not c.fetchone():
             raise Exception("Production table could not be created")
         
-        # Get existing data
         existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
         
         progress_bar.progress(50)
         
         if not existing_data.empty:
-            # Find duplicates
             new_data = df[['Date', 'Puits']].copy()
             duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
             
@@ -349,6 +324,8 @@ def save_to_db(df):
             conn.commit()
             progress_bar.progress(100)
             status_text.success(f"✅ Successfully saved {len(df)} new records!")
+            # Explicitly clear cache and rerun after commit
+            st.cache_data.clear()
             st.rerun()
         else:
             progress_bar.progress(100)
