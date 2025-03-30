@@ -1,10 +1,10 @@
-streamlit
-pandas
-numpy
-scikit-learn
-joblib
-plotly
-openpyxl
-matplotlib
-datetime
-statmodels
+streamlit==1.36.0
+pandas==2.2.2
+numpy==1.26.4
+sqlite3  # Included in Python standard library
+scikit-learn==1.5.0
+joblib==1.4.2
+plotly==5.22.0
+statsmodels==0.14.2
+prophet==1.1.5
+openpyxl==3.1.5  # For Excel file reading
