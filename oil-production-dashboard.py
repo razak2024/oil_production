@@ -1233,7 +1233,6 @@ def create_decline_plots(historical_df, wells=None, n_wells=5):
     return plots
 
 # Main application function
-# Main application function
 def main():
     # Sidebar with data management
     with st.sidebar:
@@ -1318,6 +1317,21 @@ def main():
                             st.rerun()
                 else:
                     st.info("No data available to delete")
+            
+            with st.sidebar.expander("🗄️ Database Transfer"):
+                # Export functionality
+                export_database()
+                
+                # Import functionality
+                uploaded_db = st.file_uploader(
+                    "Upload database file", 
+                    type=['db', 'sqlite', 'sqlite3'],
+                    accept_multiple_files=False,
+                    key="db_uploader"
+                )
+                
+                if uploaded_db is not None:
+                    import_database(uploaded_db)
             
             # Database administration section
             with st.expander("⚠️ Database Administration"):
