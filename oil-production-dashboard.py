@@ -135,6 +135,7 @@ def init_db(df=None):
     return conn
 
 # Improved data loading function with caching for better performance
+# Improved data loading function with caching for better performance
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_from_db(date_filter=None):
     """
@@ -201,19 +202,17 @@ def load_from_db(date_filter=None):
         conn.close()
 
 # Get all available dates in the database
-@st.cache_data(ttl=300, show_spinner="Loading available dates...")
+@st.cache_data(ttl=300)
 def get_available_dates():
     """
     Get all unique dates available in the database
+    
     Returns:
     list: List of date strings in YYYY-MM-DD format
     """
     conn = init_db()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM production_data")
-        cursor.fetchone()[0]  # This will change when data is updated
-        
         cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
         dates = [row[0] for row in cursor.fetchall()]
         return dates
@@ -236,11 +235,6 @@ def manage_saved_data():
         st.sidebar.info("No data in database yet")
         return None
     
-    # Add refresh button
-    if st.sidebar.button("🔄 Refresh Date List"):
-        st.cache_data.clear()
-        st.rerun()
-    
     # Create dropdown for date selection
     selected_date = st.sidebar.selectbox(
         "📋 Select Production Date to Load",
@@ -248,26 +242,14 @@ def manage_saved_data():
         key="date_dropdown"
     )
     
-    # Export/Import section
-    with st.sidebar.expander("🗄️ Database Transfer"):
-        # Export functionality
-        export_database()
-        
-        # Import functionality
-        uploaded_db = st.file_uploader(
-            "Upload database file", 
-            type=['db', 'sqlite', 'sqlite3'],
-            accept_multiple_files=False,
-            key="db_uploader"
-        )
-        
-        if uploaded_db is not None:
-            import_database(uploaded_db)
-    
     # Automatically load data for selected date
     if selected_date:
         df = load_from_db(selected_date)
+        
+        # Show loading confirmation
         st.sidebar.success(f"✅ Loaded data for {selected_date}")
+        
+        # Return the loaded data
         return df
     
     # Show data deletion interface in expandable section
@@ -278,10 +260,12 @@ def manage_saved_data():
         )
         
         if selected_dates:
+            # Add delete button
             if st.button("❌ Delete Selected Dates", type="primary"):
                 conn = init_db()
                 c = conn.cursor()
                 
+                # Delete records
                 placeholders = ','.join(['?'] * len(selected_dates))
                 c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
                 
@@ -323,53 +307,60 @@ def reset_database():
 
 # Enhanced data saving function with progress indicator
 def save_to_db(df):
-    """Save DataFrame to SQLite database with refresh"""
-    # Initialize progress
+    """
+    Save DataFrame to SQLite database with duplicate checking and progress tracking
+    
+    Parameters:
+    df (pandas.DataFrame): DataFrame to save
+    """
+    # Create progress indicator
     progress_bar = st.progress(0)
     status_text = st.empty()
     status_text.text("Preparing data for saving...")
     
     # Ensure date is parsed correctly
     if 'Date' in df.columns:
-        try:
-            df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
-        except:
-            st.error("Invalid date format in Excel file. Use DD/MM/YYYY")
-            return False
-
-    # Initialize database (ensures table exists)
-    init_db(df)  # Pass the DataFrame to ensure proper schema
+        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y').dt.strftime('%Y-%m-%d')
     
-    # Save to database
+    # Save to database with duplicate checking
     conn = sqlite3.connect('production_data.db')
-    try:
-        # Check for duplicates
-        existing = pd.read_sql('SELECT Date, Puits FROM production_data', conn)
-        new_data = df[['Date', 'Puits']].copy()
-        duplicates = pd.merge(existing, new_data, on=['Date', 'Puits'], how='inner')
-        
-        if not duplicates.empty:
-            st.warning(f"Skipping {len(duplicates)} duplicate records")
-            df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
-
-        # Save new records
-        if not df.empty:
-            df.to_sql('production_data', conn, if_exists='append', index=False)
-            st.success(f"Saved {len(df)} new records!")
-            
-            # Clear cache and refresh to show new data
-            st.cache_data.clear()
-            st.rerun()
-            return True
-        else:
-            st.info("No new records to save")
-            return False
-            
-    except Exception as e:
-        st.error(f"Error saving to database: {str(e)}")
-        return False
-    finally:
-        conn.close()
+    
+    # Update progress
+    progress_bar.progress(25)
+    status_text.text("Checking for duplicates...")
+    
+    # Get existing dates and wells to check for duplicates
+    existing_data = pd.read_sql_query('SELECT Date, Puits FROM production_data', conn)
+    
+    # Convert new data to same format for comparison
+    new_data = df[['Date', 'Puits']].copy()
+    new_data['Date'] = pd.to_datetime(new_data['Date']).dt.strftime('%Y-%m-%d')
+    
+    # Find duplicates (existing records with same date and well)
+    duplicates = pd.merge(existing_data, new_data, on=['Date', 'Puits'], how='inner')
+    
+    # Update progress
+    progress_bar.progress(50)
+    
+    if not duplicates.empty:
+        status_text.warning(f"⚠️ Found {len(duplicates)} duplicate records (same date and well). These will be skipped.")
+        # Remove duplicates from new data before saving
+        df = df[~df.set_index(['Date', 'Puits']).index.isin(duplicates.set_index(['Date', 'Puits']).index)]
+    
+    # Update progress
+    progress_bar.progress(75)
+    status_text.text("Saving to database...")
+    
+    # Use pandas to_sql with quoted column names to handle special characters
+    if not df.empty:
+        df.to_sql('production_data', conn, if_exists='append', index=False)
+        progress_bar.progress(100)
+        status_text.success(f"✅ Successfully saved {len(df)} new records to database!")
+    else:
+        progress_bar.progress(100)
+        status_text.info("No new records to save after duplicate removal.")
+    
+    conn.close()
 
 # Enhanced Excel parsing function with error handling
 def parse_excel(uploaded_file):
