@@ -1340,6 +1340,9 @@ def main():
                 # Filter data for selected well
                 well_data = historical_df[historical_df['Puits'] == selected_well].copy()
                 well_data = well_data.sort_values('Date')
+                if well_data['Date'].isnull().any():
+                    st.warning("Some date values are invalid and will be skipped")
+                    well_data = well_data.dropna(subset=['Date'])
                 
                 # Ensure numeric columns
                 numeric_cols = ['Pt (bar)', 'Pp (bar)', 'Q Huile Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)', 
@@ -1350,7 +1353,7 @@ def main():
                 
                 # Create integrated pressure and production distribution plot
                 fig_combined = go.Figure()
-                
+
                 # Add WHP trace
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1359,7 +1362,7 @@ def main():
                     name='WHP (Pt)',
                     line=dict(color='blue')
                 ))
-                
+
                 # Add Flowline Pressure trace
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1368,7 +1371,7 @@ def main():
                     name='Flowline Pressure (Pp)',
                     line=dict(color='green')
                 ))
-                
+
                 # Add Oil Production trace (secondary y-axis)
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1378,7 +1381,7 @@ def main():
                     line=dict(color='red', dash='dash'),
                     yaxis='y2'
                 ))
-                
+
                 # Add Water Production trace (secondary y-axis)
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1388,7 +1391,7 @@ def main():
                     line=dict(color='cyan', dash='dash'),
                     yaxis='y2'
                 ))
-                
+
                 # Add Gas Production trace (secondary y-axis)
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1398,7 +1401,7 @@ def main():
                     line=dict(color='orange', dash='dash'),
                     yaxis='y3'
                 ))
-                
+
                 # Add Choke Size trace (secondary y-axis)
                 fig_combined.add_trace(go.Scatter(
                     x=well_data['Date'],
@@ -1408,27 +1411,19 @@ def main():
                     line=dict(color='purple', dash='dashdot'),
                     yaxis='y4'
                 ))
-                
-                # Add vertical lines at the present date
-                current_date = pd.Timestamp.now().normalize()
-                fig_combined.add_vline(
-                    x=current_date, 
-                    line_dash="dash", 
-                    line_color="gray",
-                    annotation_text="Present",
-                    annotation_position="top"
-                )
-                
-                # Update layout for multiple y-axes
-                # Add vertical line at the present date
-                current_date = pd.Timestamp.now().normalize().strftime('%Y-%m-%d')
-                fig_combined.add_vline(
-                    x=current_date, 
-                    line_dash="dash", 
-                    line_color="gray",
-                    annotation_text="Present",
-                    annotation_position="top"
-                )
+
+                # Add vertical line at the present date with error handling
+                try:
+                    current_date = pd.Timestamp.now().normalize()
+                    fig_combined.add_vline(
+                        x=current_date, 
+                        line_dash="dash", 
+                        line_color="gray",
+                        annotation_text="Present",
+                        annotation_position="top"
+                    )
+                except Exception as e:
+                    st.warning(f"Could not add current date marker: {str(e)}")
 
                 # Update layout for multiple y-axes
                 fig_combined.update_layout(
@@ -1465,38 +1460,6 @@ def main():
                 )
 
                 st.plotly_chart(fig_combined, use_container_width=True)
-                
-                # Original WHP vs Production plot (kept for reference)
-                st.subheader("Individual Trend Charts")
-                with st.expander("Show Individual Trend Charts"):
-                    fig_whp = px.line(
-                        well_data,
-                        x='Date',
-                        y=['Pt (bar)', 'Q Huile Corr (Sm³/j)'],
-                        title=f'WHP and Oil Production Trend for {selected_well}',
-                        labels={'value': 'Value', 'variable': 'Parameter'},
-                        color_discrete_sequence=['#FF5733', '#3385FF']
-                    )
-                    fig_whp.update_layout(
-                        yaxis_title='Value',
-                        legend_title='Parameter'
-                    )
-                    st.plotly_chart(fig_whp, use_container_width=True)
-                    
-                    # Create Flowline Pressure vs Production plot
-                    fig_pp = px.line(
-                        well_data,
-                        x='Date',
-                        y=['Pp (bar)', 'Q Huile Corr (Sm³/j)'],
-                        title=f'Flowline Pressure and Oil Production Trend for {selected_well}',
-                        labels={'value': 'Value', 'variable': 'Parameter'},
-                        color_discrete_sequence=['#33FF57', '#3385FF']
-                    )
-                    fig_pp.update_layout(
-                        yaxis_title='Value',
-                        legend_title='Parameter'
-                    )
-                    st.plotly_chart(fig_pp, use_container_width=True)
             else:
                 st.info("No historical data available for pressure trend analysis")
             
