@@ -601,11 +601,6 @@ def main():
     # Initialize database
     conn = init_db()
     conn.close()
-    if 'selected_table' in st.session_state:
-        if st.sidebar.button("Clear Selection Before Upload"):
-            del st.session_state.selected_table
-            del st.session_state.selected_date
-            st.rerun()
     
     st.title("🛢️ Oil Production Dashboard GTL Region")
     
