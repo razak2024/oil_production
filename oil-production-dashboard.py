@@ -461,34 +461,65 @@ def parse_excel(uploaded_file):
         status_text = st.empty()
         status_text.text("Reading Excel file...")
         
-        # Read Excel file
-        df = pd.read_excel(uploaded_file, parse_dates=['Date'])
+        # Read Excel file without assuming date column
+        df = pd.read_excel(uploaded_file)
         
         # Update progress
         progress_bar.progress(33)
         status_text.text("Processing dates...")
         
-        # Ensure consistent date format
-        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
+        # Try to find date column (case insensitive and with different common names)
+        date_col = None
+        possible_date_cols = ['Date', 'DATE', 'date', 'Jour', 'jour', 'Day', 'day']
+        
+        for col in possible_date_cols:
+            if col in df.columns:
+                date_col = col
+                break
+        
+        if date_col is None:
+            progress_bar.progress(100)
+            status_text.error("Could not find a date column in the Excel file. Please ensure your file has a column named 'Date'.")
+            return None
+        
+        # Convert date column to datetime
+        try:
+            df['Date'] = pd.to_datetime(df[date_col], errors='coerce')
+            # Drop rows where date couldn't be parsed
+            df = df[df['Date'].notna()]
+            
+            if df.empty:
+                progress_bar.progress(100)
+                status_text.error("No valid dates found in the date column.")
+                return None
+        except Exception as e:
+            progress_bar.progress(100)
+            status_text.error(f"Error processing dates: {str(e)}")
+            return None
         
         # Update progress
         progress_bar.progress(66)
         status_text.text("Validating data...")
         
-        # Check for required columns
-        required_cols = ['Date', 'Puits', 'Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
-        missing_cols = [col for col in required_cols if col not in df.columns]
+        # Check for required columns (with case-insensitive matching)
+        required_cols = ['Puits', 'Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
+        missing_cols = []
+        
+        for col in required_cols:
+            if col not in df.columns:
+                # Try case-insensitive match
+                matching_cols = [c for c in df.columns if c.lower() == col.lower()]
+                if matching_cols:
+                    # Rename to standard column name
+                    df.rename(columns={matching_cols[0]: col}, inplace=True)
+                else:
+                    missing_cols.append(col)
         
         if missing_cols:
             progress_bar.progress(100)
             status_text.error(f"Missing required columns: {', '.join(missing_cols)}")
             return None
         
-        # Validate date format
-        invalid_dates = df['Date'].isna().sum()
-        if invalid_dates > 0:
-            status_text.warning(f"Found {invalid_dates} rows with invalid dates. These may cause issues.")
-            
         # Completion
         progress_bar.progress(100)
         status_text.success("Excel file processed successfully!")
