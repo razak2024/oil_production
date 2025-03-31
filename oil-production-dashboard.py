@@ -1318,7 +1318,7 @@ def main():
                 else:
                     st.info("No data available to delete")
             
-            with st.sidebar.expander("🗄️ Database Transfer"):
+        with st.sidebar.expander("🗄️ Database Transfer"):
                 # Export functionality
                 export_database()
                 
@@ -1334,7 +1334,7 @@ def main():
                     import_database(uploaded_db)
             
             # Database administration section
-            with st.expander("⚠️ Database Administration"):
+        with st.expander("⚠️ Database Administration"):
                 reset_database()
         
         # Settings tab
