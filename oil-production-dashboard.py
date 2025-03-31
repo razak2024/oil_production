@@ -193,24 +193,6 @@ def load_from_db(date_filter=None):
     finally:
         conn.close()
 
-# Get all available dates in the database
-@st.cache_data(ttl=300, show_spinner="Loading available dates...")
-def get_available_dates():
-    conn = init_db()
-    try:
-        cursor = conn.cursor()
-        # Force a fresh count to invalidate cache when data changes
-        cursor.execute("SELECT COUNT(*) FROM production_data")
-        cursor.fetchone()[0]
-        
-        cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
-        dates = [row[0] for row in cursor.fetchall()]
-        return dates
-    except sqlite3.Error:
-        return []
-    finally:
-        conn.close()
-
 def manage_saved_data():
     """
     Show interface for managing saved data with dropdown list and automatic loading
@@ -310,7 +292,109 @@ def reset_database():
     elif confirmation and confirmation != "CONFIRM":
         st.sidebar.error("Confirmation text does not match 'CONFIRM'")
 
-# Enhanced data saving function with progress indicator
+def import_database(uploaded_file):
+    """
+    Import a database file to replace the current database
+    
+    Parameters:
+    uploaded_file: Uploaded file object from Streamlit
+    
+    Returns:
+    bool: True if import was successful, False otherwise
+    """
+    # Add confirmation to prevent accidental imports
+    confirmation = st.text_input("Type 'CONFIRM IMPORT' to replace database:")
+    
+    if confirmation == "CONFIRM IMPORT":
+        try:
+            # Save the uploaded file to a temporary location
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+                tmp.write(uploaded_file.getvalue())
+                tmp_path = tmp.name
+            
+            # Verify the file is a valid SQLite database
+            try:
+                test_conn = sqlite3.connect(tmp_path)
+                test_conn.cursor().execute("SELECT name FROM sqlite_master WHERE type='table'")
+                test_conn.close()
+            except sqlite3.DatabaseError:
+                st.error("Uploaded file is not a valid SQLite database")
+                return False
+            
+            # Backup current database (just in case)
+            backup_path = 'production_data_backup.db'
+            if os.path.exists('production_data.db'):
+                shutil.copy2('production_data.db', backup_path)
+            
+            # Replace current database with uploaded one
+            shutil.copy2(tmp_path, 'production_data.db')
+            
+            st.success("Database imported successfully! Backup saved as production_data_backup.db")
+            
+            # Clear cache to force reload
+            st.cache_data.clear()
+            return True
+            
+        except Exception as e:
+            st.error(f"Error importing database: {str(e)}")
+            if os.path.exists(backup_path):
+                st.info("Original database has been restored from backup")
+                shutil.copy2(backup_path, 'production_data.db')
+            return False
+        finally:
+            # Clean up temporary files
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    elif confirmation and confirmation != "CONFIRM IMPORT":
+        st.error("Confirmation text does not match 'CONFIRM IMPORT'")
+        return False
+    
+    return False
+
+# Modified export_database function for direct download
+def export_database():
+    """
+    Export the SQLite database to a file for backup or transfer
+    """
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
+        tmp.close()
+        tmp_path = tmp.name
+    
+    try:
+        # Connect to source and destination databases
+        src_conn = sqlite3.connect('production_data.db')
+        dst_conn = sqlite3.connect(tmp_path)
+        
+        # Backup the database
+        src_conn.backup(dst_conn)
+        
+        # Close connections
+        src_conn.close()
+        dst_conn.close()
+        
+        # Read the temporary file as bytes
+        with open(tmp_path, 'rb') as f:
+            db_bytes = f.read()
+        
+        # Create download button
+        st.download_button(
+            label="⬇️ Download Database File",
+            data=db_bytes,
+            file_name="production_data_export.db",
+            mime="application/x-sqlite3",
+            help="Download a complete copy of the current database"
+        )
+        return True
+    except Exception as e:
+        st.error(f"Error exporting database: {str(e)}")
+        return False
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+# Modified save_to_db function with automatic refresh
 def save_to_db(df):
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -350,108 +434,47 @@ def save_to_db(df):
             conn.commit()
             progress_bar.progress(100)
             status_text.success(f"✅ Successfully saved {len(df)} new records!")
-            # Explicitly clear cache and rerun after commit
+            
+            # Set the flag to refresh dashboard
+            st.session_state['refresh_dashboard'] = True
+            
+            # Explicitly clear cache
             st.cache_data.clear()
-            st.rerun()
+            
+            return True
         else:
             progress_bar.progress(100)
             status_text.info("No new records to save after duplicate removal.")
+            return False
             
     except Exception as e:
         status_text.error(f"Error saving to database: {str(e)}")
         conn.rollback()
+        return False
     finally:
         conn.close()
 
-def export_database():
-    """
-    Export the SQLite database to a file for backup or transfer
-    """
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
-        tmp.close()
-        tmp_path = tmp.name
-    
+# Get all available dates in the database with force refresh option
+@st.cache_data(ttl=300, show_spinner="Loading available dates...")
+def get_available_dates(force_refresh=False):
+    # Force parameter is just to invalidate cache when needed
+    conn = init_db()
     try:
-        # Connect to source and destination databases
-        src_conn = sqlite3.connect('production_data.db')
-        dst_conn = sqlite3.connect(tmp_path)
-        
-        # Backup the database
-        src_conn.backup(dst_conn)
-        
-        # Close connections
-        src_conn.close()
-        dst_conn.close()
-        
-        # Read the temporary file as bytes
-        with open(tmp_path, 'rb') as f:
-            db_bytes = f.read()
-        
-        # Create download button
-        st.sidebar.download_button(
-            label="⬇️ Export Database",
-            data=db_bytes,
-            file_name="production_data_export.db",
-            mime="application/x-sqlite3",
-            help="Download a complete copy of the current database"
-        )
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
+        dates = [row[0] for row in cursor.fetchall()]
+        return dates
+    except sqlite3.Error:
+        return []
     finally:
-        # Clean up temporary file
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        conn.close()
 
-def import_database(uploaded_file):
-    """
-    Import a database file to replace the current database
-    
-    Parameters:
-    uploaded_file: Uploaded file object from Streamlit
-    """
-    # Add confirmation to prevent accidental imports
-    confirmation = st.sidebar.text_input("Type 'CONFIRM IMPORT' to replace database:")
-    
-    if confirmation == "CONFIRM IMPORT":
-        try:
-            # Save the uploaded file to a temporary location
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
-                tmp.write(uploaded_file.getvalue())
-                tmp_path = tmp.name
-            
-            # Verify the file is a valid SQLite database
-            try:
-                test_conn = sqlite3.connect(tmp_path)
-                test_conn.cursor().execute("SELECT name FROM sqlite_master WHERE type='table'")
-                test_conn.close()
-            except sqlite3.DatabaseError:
-                st.sidebar.error("Uploaded file is not a valid SQLite database")
-                return
-            
-            # Backup current database (just in case)
-            backup_path = 'production_data_backup.db'
-            if os.path.exists('production_data.db'):
-                shutil.copy2('production_data.db', backup_path)
-            
-            # Replace current database with uploaded one
-            shutil.copy2(tmp_path, 'production_data.db')
-            
-            st.sidebar.success("Database imported successfully! Backup saved as production_data_backup.db")
-            st.sidebar.info("Please refresh the page to load the new data")
-            
-            # Clear cache to force reload
-            st.cache_data.clear()
-            
-        except Exception as e:
-            st.sidebar.error(f"Error importing database: {str(e)}")
-            if os.path.exists(backup_path):
-                st.sidebar.info("Original database has been restored from backup")
-                shutil.copy2(backup_path, 'production_data.db')
-        finally:
-            # Clean up temporary files
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    elif confirmation and confirmation != "CONFIRM IMPORT":
-        st.sidebar.error("Confirmation text does not match 'CONFIRM IMPORT'")
+# Add initialization of session state variables
+if 'refresh_dashboard' not in st.session_state:
+    st.session_state['refresh_dashboard'] = False
+
+if 'active_tab' not in st.session_state:
+    st.session_state['active_tab'] = 0
 
 # Enhanced Excel parsing function with error handling
 def parse_excel(uploaded_file):
@@ -461,65 +484,34 @@ def parse_excel(uploaded_file):
         status_text = st.empty()
         status_text.text("Reading Excel file...")
         
-        # Read Excel file without assuming date column
-        df = pd.read_excel(uploaded_file)
+        # Read Excel file
+        df = pd.read_excel(uploaded_file, parse_dates=['Date'])
         
         # Update progress
         progress_bar.progress(33)
         status_text.text("Processing dates...")
         
-        # Try to find date column (case insensitive and with different common names)
-        date_col = None
-        possible_date_cols = ['Date', 'DATE', 'date', 'Jour', 'jour', 'Day', 'day']
-        
-        for col in possible_date_cols:
-            if col in df.columns:
-                date_col = col
-                break
-        
-        if date_col is None:
-            progress_bar.progress(100)
-            status_text.error("Could not find a date column in the Excel file. Please ensure your file has a column named 'Date'.")
-            return None
-        
-        # Convert date column to datetime
-        try:
-            df['Date'] = pd.to_datetime(df[date_col], errors='coerce')
-            # Drop rows where date couldn't be parsed
-            df = df[df['Date'].notna()]
-            
-            if df.empty:
-                progress_bar.progress(100)
-                status_text.error("No valid dates found in the date column.")
-                return None
-        except Exception as e:
-            progress_bar.progress(100)
-            status_text.error(f"Error processing dates: {str(e)}")
-            return None
+        # Ensure consistent date format
+        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
         
         # Update progress
         progress_bar.progress(66)
         status_text.text("Validating data...")
         
-        # Check for required columns (with case-insensitive matching)
-        required_cols = ['Puits', 'Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
-        missing_cols = []
-        
-        for col in required_cols:
-            if col not in df.columns:
-                # Try case-insensitive match
-                matching_cols = [c for c in df.columns if c.lower() == col.lower()]
-                if matching_cols:
-                    # Rename to standard column name
-                    df.rename(columns={matching_cols[0]: col}, inplace=True)
-                else:
-                    missing_cols.append(col)
+        # Check for required columns
+        required_cols = ['Date', 'Puits', 'Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
+        missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
             progress_bar.progress(100)
             status_text.error(f"Missing required columns: {', '.join(missing_cols)}")
             return None
         
+        # Validate date format
+        invalid_dates = df['Date'].isna().sum()
+        if invalid_dates > 0:
+            status_text.warning(f"Found {invalid_dates} rows with invalid dates. These may cause issues.")
+            
         # Completion
         progress_bar.progress(100)
         status_text.success("Excel file processed successfully!")
@@ -1264,6 +1256,7 @@ def create_decline_plots(historical_df, wells=None, n_wells=5):
     return plots
 
 # Main application function
+# Main application function
 def main():
     # Sidebar with data management
     with st.sidebar:
@@ -1271,106 +1264,144 @@ def main():
         st.title("🛢️ Oil Production Analytics")
         
         # Create tabs for different sidebar sections
-        sidebar_tabs = st.tabs(["💾 Database Management", "⚙️ Settings"])
+        sidebar_tabs = st.tabs(["💾 Database", "⚙️ Settings"])
         
         # Database Management tab
         with sidebar_tabs[0]:
-            st.header("📅 Database Management")
+            st.header("Database Management")
             
-            # Upload section - removed nested expander
-            uploaded_file = st.file_uploader("📤 Upload Excel file", type=['xlsx', 'xls'])
+            # Reorganized layout with clearer sections
+            col1, col2 = st.columns(2)
             
-            if uploaded_file is not None:
-                # Parse Excel file
-                df = parse_excel(uploaded_file)
-                
-                if df is not None:
-                    # Show sample of data in a container instead of expander
-                    preview_container = st.container()
-                    with preview_container:
-                        st.write("Preview Data:")
-                        st.dataframe(df.head())
+            with col1:
+                st.subheader("📤 Data Import")
+            
+            with col2:
+                st.subheader("📅 Data Selection")
+            
+            # Upload section - Left column
+            with col1:
+                with st.expander("Upload Excel File", expanded=True):
+                    uploaded_file = st.file_uploader("Upload production data", type=['xlsx', 'xls'], key="excel_uploader")
                     
-                    # Save to database
-                    if st.button("💾 Save to Database", type="primary"):
-                        save_to_db(df)
-                        # Force refresh after saving
-                        st.cache_data.clear()
-                        st.rerun()
+                    if uploaded_file is not None:
+                        # Parse Excel file
+                        df = parse_excel(uploaded_file)
+                        
+                        if df is not None:
+                            # Show sample of data
+                            with st.expander("Preview Data"):
+                                st.dataframe(df.head())
+                            
+                            # Save to database with auto-refresh
+                            if st.button("Save to Database", type="primary"):
+                                save_to_db(df)
+                                # Set a flag to trigger dashboard refresh
+                                st.session_state['refresh_dashboard'] = True
+                                # Update the date dropdown to the latest date
+                                new_date = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d').iloc[0]
+                                st.session_state['date_dropdown'] = new_date
+                                st.rerun()
+                
+                with st.expander("Database File Transfer"):
+                    # Export functionality
+                    if st.button("⬇️ Export Database"):
+                        export_database()
+                    
+                    # Import functionality
+                    uploaded_db = st.file_uploader(
+                        "Import database file", 
+                        type=['db', 'sqlite', 'sqlite3'],
+                        accept_multiple_files=False,
+                        key="db_uploader"
+                    )
+                    
+                    if uploaded_db is not None:
+                        if st.button("Import Database", type="primary"):
+                            success = import_database(uploaded_db)
+                            if success:
+                                # Force reload date list and refresh dashboard
+                                st.cache_data.clear()
+                                st.session_state['refresh_dashboard'] = True
+                                st.rerun()
             
-            # Load existing data section
-            available_dates = get_available_dates()
-            
-            if not available_dates:
-                st.info("No data in database yet")
-            else:
-                # Add refresh button
-                if st.button("🔄 Refresh Date List"):
+            # Data selection - Right column
+            with col2:
+                # Get all available dates
+                available_dates = get_available_dates()
+                
+                # Refresh button for date list
+                if st.button("🔄 Refresh Data List"):
+                    # Clear the cache to force reload of dates
                     st.cache_data.clear()
                     st.rerun()
-                    
-                # Create dropdown for date selection
-                selected_date = st.selectbox(
-                    "📋 Select Production Date to Load",
-                    options=available_dates,
-                    key="date_dropdown"
-                )
                 
-                # Automatically load data for selected date
-                if selected_date:
-                    df = load_from_db(selected_date)
-                    st.success(f"✅ Loaded data for {selected_date}")
+                if not available_dates:
+                    st.info("No data in database yet")
+                else:
+                    # Create dropdown for date selection
+                    selected_date = st.selectbox(
+                        "Select Production Date",
+                        options=available_dates,
+                        key="date_dropdown"
+                    )
+                    
+                    # Automatically load data for selected date
+                    if selected_date:
+                        df = load_from_db(selected_date)
+                        
+                        # Show loading confirmation
+                        st.success(f"✅ Loaded data for {selected_date}")
+                        
+                        # Add button to view this data
+                        if st.button("View Selected Data"):
+                            # Set active tab to Data View
+                            st.session_state['active_tab'] = 5  # Index of Data View tab
+                            st.rerun()
             
-            # Database transfer section
-            st.subheader("🗄️ Database Transfer")
-            
-            # Export functionality
-            export_database()
-            
-            # Import functionality with improved refresh
-            uploaded_db = st.file_uploader(
-                "Upload database file", 
-                type=['db', 'sqlite', 'sqlite3'],
-                accept_multiple_files=False,
-                key="db_uploader"
-            )
-            
-            if uploaded_db is not None:
-                if st.button("Import Database", type="primary"):
-                    import_database(uploaded_db)
-                    # Force refresh after import
-                    st.cache_data.clear()
-                    st.rerun()
+            # Data management section - Below both columns
+            st.subheader("🗂️ Data Management")
             
             # Data deletion interface
-            st.subheader("🗑️ Delete Data")
-            if available_dates:
-                selected_dates = st.multiselect(
-                    "Select dates to remove",
-                    options=available_dates,
-                    key="delete_dates"
-                )
-                
-                if selected_dates and st.button("❌ Delete Selected Dates", type="primary"):
-                    conn = init_db()
-                    c = conn.cursor()
+            with st.expander("Delete Production Data"):
+                if available_dates:
+                    selected_dates = st.multiselect(
+                        "Select dates to remove",
+                        options=available_dates
+                    )
                     
-                    placeholders = ','.join(['?'] * len(selected_dates))
-                    c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
-                    
-                    deleted_rows = conn.total_changes
-                    conn.commit()
-                    conn.close()
-                    
-                    st.success(f"Deleted {deleted_rows} records from selected dates!")
-                    st.cache_data.clear()
-                    st.rerun()
-            else:
-                st.info("No data available to delete")
+                    if selected_dates:
+                        # Add delete button
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            delete_confirm = st.checkbox("Confirm deletion")
+                        with col2:
+                            if delete_confirm:
+                                if st.button("❌ Delete Selected Dates", type="primary"):
+                                    conn = init_db()
+                                    c = conn.cursor()
+                                    
+                                    # Delete records
+                                    placeholders = ','.join(['?'] * len(selected_dates))
+                                    c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
+                                    
+                                    deleted_rows = conn.total_changes
+                                    conn.commit()
+                                    conn.close()
+                                    
+                                    st.success(f"Deleted {deleted_rows} records from selected dates!")
+                                    # Clear cache to refresh date list
+                                    st.cache_data.clear()
+                                    st.rerun()
+                else:
+                    st.info("No data available to delete")
             
             # Database administration section
-            st.subheader("⚠️ Database Administration")
-            reset_database()
+            with st.expander("⚠️ Database Administration"):
+                st.warning("Danger Zone! These actions cannot be undone.")
+                
+                # Database reset functionality
+                reset_database()
         
         # Settings tab
         with sidebar_tabs[1]:
@@ -1389,6 +1420,10 @@ def main():
     # Main interface
     st.title("🛢️ Oil Production Analytics Dashboard")
     
+    # Initialize session state for active tab if not exist
+    if 'active_tab' not in st.session_state:
+        st.session_state['active_tab'] = 0
+    
     # Check if data is loaded
     if 'date_dropdown' in st.session_state and st.session_state.date_dropdown:
         current_date = st.session_state.date_dropdown
@@ -1396,14 +1431,24 @@ def main():
         historical_df = load_from_db()  # Load all historical data
         
         # Create dashboard tabs
-        tabs = st.tabs([
+        tab_titles = [
             "📊 Overview", 
             "🔍 Well Analysis", 
             "📈 Production Trends", 
             "🔮 Forecasting", 
             "💧 Well Washing",
             "📋 Data View"
-        ])
+        ]
+        
+        tabs = st.tabs(tab_titles)
+        
+        # Set active tab based on session state
+        # This would be used in the actual tab content sections
+        st.session_state['active_tab']
+        
+        # Clear refresh flag after dashboard is updated
+        if 'refresh_dashboard' in st.session_state and st.session_state['refresh_dashboard']:
+            st.session_state['refresh_dashboard'] = False
         
         # Overview Tab
         with tabs[0]:
