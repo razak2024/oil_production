@@ -1246,25 +1246,28 @@ def main():
         with sidebar_tabs[0]:
             st.header("📅 Database Management")
             
-            # Upload section
-            with st.expander("📤 Upload New Data", expanded=True):
-                uploaded_file = st.file_uploader("Upload Excel file", type=['xlsx', 'xls'])
+            # Upload section - removed nested expander
+            uploaded_file = st.file_uploader("📤 Upload Excel file", type=['xlsx', 'xls'])
+            
+            if uploaded_file is not None:
+                # Parse Excel file
+                df = parse_excel(uploaded_file)
                 
-                if uploaded_file is not None:
-                    # Parse Excel file
-                    df = parse_excel(uploaded_file)
+                if df is not None:
+                    # Show sample of data in a container instead of expander
+                    preview_container = st.container()
+                    with preview_container:
+                        st.write("Preview Data:")
+                        st.dataframe(df.head())
                     
-                    if df is not None:
-                        # Show sample of data
-                        with st.expander("Preview Data"):
-                            st.dataframe(df.head())
-                        
-                        # Save to database
-                        if st.button("Save to Database", type="primary"):
-                            save_to_db(df)
+                    # Save to database
+                    if st.button("💾 Save to Database", type="primary"):
+                        save_to_db(df)
+                        # Force refresh after saving
+                        st.cache_data.clear()
+                        st.rerun()
             
             # Load existing data section
-            # Get all available dates
             available_dates = get_available_dates()
             
             if not available_dates:
@@ -1272,8 +1275,7 @@ def main():
             else:
                 # Add refresh button
                 if st.button("🔄 Refresh Date List"):
-                    # Force cache invalidation for get_available_dates
-                    get_available_dates(force_refresh=True)
+                    st.cache_data.clear()
                     st.rerun()
                     
                 # Create dropdown for date selection
@@ -1286,56 +1288,58 @@ def main():
                 # Automatically load data for selected date
                 if selected_date:
                     df = load_from_db(selected_date)
-                    
-                    # Show loading confirmation
                     st.success(f"✅ Loaded data for {selected_date}")
             
-            # Data deletion interface
-            with st.expander("🗑️ Delete Data"):
-                if available_dates:
-                    selected_dates = st.multiselect(
-                        "Select dates to remove",
-                        options=available_dates
-                    )
-                    
-                    if selected_dates:
-                        # Add delete button
-                        if st.button("❌ Delete Selected Dates", type="primary"):
-                            conn = init_db()
-                            c = conn.cursor()
-                            
-                            # Delete records
-                            placeholders = ','.join(['?'] * len(selected_dates))
-                            c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
-                            
-                            deleted_rows = conn.total_changes
-                            conn.commit()
-                            conn.close()
-                            
-                            st.success(f"Deleted {deleted_rows} records from selected dates!")
-                            get_available_dates(force_refresh=True)
-                            st.rerun()
-                else:
-                    st.info("No data available to delete")
+            # Database transfer section
+            st.subheader("🗄️ Database Transfer")
             
-        with st.sidebar.expander("🗄️ Database Transfer"):
-                # Export functionality
-                export_database()
-                
-                # Import functionality
-                uploaded_db = st.file_uploader(
-                    "Upload database file", 
-                    type=['db', 'sqlite', 'sqlite3'],
-                    accept_multiple_files=False,
-                    key="db_uploader"
+            # Export functionality
+            export_database()
+            
+            # Import functionality with improved refresh
+            uploaded_db = st.file_uploader(
+                "Upload database file", 
+                type=['db', 'sqlite', 'sqlite3'],
+                accept_multiple_files=False,
+                key="db_uploader"
+            )
+            
+            if uploaded_db is not None:
+                if st.button("Import Database", type="primary"):
+                    import_database(uploaded_db)
+                    # Force refresh after import
+                    st.cache_data.clear()
+                    st.rerun()
+            
+            # Data deletion interface
+            st.subheader("🗑️ Delete Data")
+            if available_dates:
+                selected_dates = st.multiselect(
+                    "Select dates to remove",
+                    options=available_dates,
+                    key="delete_dates"
                 )
                 
-                if uploaded_db is not None:
-                    import_database(uploaded_db)
+                if selected_dates and st.button("❌ Delete Selected Dates", type="primary"):
+                    conn = init_db()
+                    c = conn.cursor()
+                    
+                    placeholders = ','.join(['?'] * len(selected_dates))
+                    c.execute(f"DELETE FROM production_data WHERE date(Date) IN ({placeholders})", selected_dates)
+                    
+                    deleted_rows = conn.total_changes
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"Deleted {deleted_rows} records from selected dates!")
+                    st.cache_data.clear()
+                    st.rerun()
+            else:
+                st.info("No data available to delete")
             
             # Database administration section
-        with st.expander("⚠️ Database Administration"):
-                reset_database()
+            st.subheader("⚠️ Database Administration")
+            reset_database()
         
         # Settings tab
         with sidebar_tabs[1]:
