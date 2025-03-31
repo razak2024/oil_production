@@ -477,7 +477,6 @@ if 'active_tab' not in st.session_state:
     st.session_state['active_tab'] = 0
 
 # Enhanced Excel parsing function with error handling
-# Enhanced Excel parsing function with improved error handling
 def parse_excel(uploaded_file):
     try:
         # Create progress indicator
@@ -485,47 +484,22 @@ def parse_excel(uploaded_file):
         status_text = st.empty()
         status_text.text("Reading Excel file...")
         
-        # First read the Excel file without parsing dates to check columns
-        df_check = pd.read_excel(uploaded_file)
-        progress_bar.progress(25)
+        # Read Excel file
+        df = pd.read_excel(uploaded_file, parse_dates=['Date'])
         
-        # Check if Date column exists with various possible names
-        date_col_options = ['Date', 'date', 'DATE', 'DateTime', 'Date Time', 'Datetime']
-        date_col = None
+        # Update progress
+        progress_bar.progress(33)
+        status_text.text("Processing dates...")
         
-        for col_name in date_col_options:
-            if col_name in df_check.columns:
-                date_col = col_name
-                break
+        # Ensure consistent date format
+        df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y')
         
-        # If no date column found, try to infer it
-        if not date_col:
-            # Look for columns that might contain date values
-            for col in df_check.columns:
-                # Check if column name contains date-related words
-                if any(date_word in col.lower() for date_word in ['date', 'time', 'jour', 'day']):
-                    date_col = col
-                    break
-        
-        status_text.text(f"Processing data with date column: {date_col if date_col else 'None found'}")
-        progress_bar.progress(50)
-        
-        # Now read the Excel file again with the correct date column
-        if date_col:
-            df = pd.read_excel(uploaded_file, parse_dates=[date_col])
-            # Rename to standard column name if needed
-            if date_col != 'Date':
-                df.rename(columns={date_col: 'Date'}, inplace=True)
-        else:
-            # If no date column found, just load without parsing dates
-            df = df_check.copy()
-            status_text.warning("No date column identified. Please ensure your Excel file has a proper date column.")
-        
-        progress_bar.progress(75)
+        # Update progress
+        progress_bar.progress(66)
         status_text.text("Validating data...")
         
-        # Check for required columns (adjust based on your actual requirements)
-        required_cols = ['Puits']  # Only require well name as minimum
+        # Check for required columns
+        required_cols = ['Date', 'Puits', 'Q Huile Corr (Sm³/j)', 'Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -533,40 +507,20 @@ def parse_excel(uploaded_file):
             status_text.error(f"Missing required columns: {', '.join(missing_cols)}")
             return None
         
-        # Validate data structure
-        if 'Date' in df.columns:
-            # Try to convert any date-like column to datetime
-            try:
-                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-                invalid_dates = df['Date'].isna().sum()
-                if invalid_dates > 0:
-                    status_text.warning(f"Found {invalid_dates} rows with invalid dates. These may cause issues.")
-            except Exception as e:
-                status_text.warning(f"Date conversion issue: {str(e)}")
-        else:
-            # If no Date column exists, create one with today's date
-            df['Date'] = pd.Timestamp.today().date()
-            status_text.warning("Created default Date column with today's date.")
+        # Validate date format
+        invalid_dates = df['Date'].isna().sum()
+        if invalid_dates > 0:
+            status_text.warning(f"Found {invalid_dates} rows with invalid dates. These may cause issues.")
             
         # Completion
         progress_bar.progress(100)
         status_text.success("Excel file processed successfully!")
-        
-        # Display column names for debugging
-        with st.expander("Column names found"):
-            st.write(list(df.columns))
-            
         return df
     
     except Exception as e:
-        if progress_bar:
-            progress_bar.progress(100)
-        if status_text:
-            status_text.error(f"Error parsing Excel file: {str(e)}")
-            st.error("Please check that your Excel file is properly formatted and not corrupt.")
-            
-        # More detailed error information for debugging
-        st.expander("Error details").exception(e)
+        # Replace the nested expander with a simple error display
+        status_text.error(f"Error parsing Excel file: {str(e)}")
+        st.error("Please check that your Excel file is properly formatted and not corrupt.")
         return None
 
 # Enhanced pressure model training with better scaling and validation
