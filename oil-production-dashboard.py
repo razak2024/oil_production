@@ -1258,7 +1258,6 @@ def create_decline_plots(historical_df, wells=None, n_wells=5):
     return plots
 
 # Main application function
-# Main application function
 def main():
     # Sidebar with data management
     with st.sidebar:
@@ -1289,21 +1288,19 @@ def main():
                     if uploaded_file is not None:
                         # Parse Excel file
                         df = parse_excel(uploaded_file)
+                
+                # Preview data in a separate expander
+                if 'df' in locals() and df is not None:
+                    with st.expander("Preview Data"):
+                        st.dataframe(df.head())
                         
-                        if df is not None:
-                            # Show sample of data
-                            with st.expander("Preview Data"):
-                                st.dataframe(df.head())
-                            
-                            # Save to database with auto-refresh
-                            if st.button("Save to Database", type="primary"):
-                                save_to_db(df)
-                                # Set a flag to trigger dashboard refresh
-                                st.session_state['refresh_dashboard'] = True
-                                # Update the date dropdown to the latest date
-                                new_date = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d').iloc[0]
-                                st.session_state['date_dropdown'] = new_date
-                                st.rerun()
+                    # Save to database button (now outside both expanders)
+                    if st.button("Save to Database", type="primary"):
+                        save_to_db(df)
+                        st.session_state['refresh_dashboard'] = True
+                        new_date = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d').iloc[0]
+                        st.session_state['date_dropdown'] = new_date
+                        st.rerun()
                 
                 with st.expander("Database File Transfer"):
                     # Export functionality
