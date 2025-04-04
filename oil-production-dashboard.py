@@ -303,9 +303,9 @@ def import_database(uploaded_file):
     bool: True if import was successful, False otherwise
     """
     # Add confirmation to prevent accidental imports
-    confirmation = st.text_input("Type 'CONFIRM IMPORT' to replace database:")
+    confirmation = st.checkbox("I confirm I want to replace the current database")
     
-    if confirmation == "CONFIRM IMPORT":
+    if confirmation:
         try:
             # Save the uploaded file to a temporary location
             with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
@@ -333,6 +333,19 @@ def import_database(uploaded_file):
             
             # Clear cache to force reload
             st.cache_data.clear()
+            
+            # Set the flag to refresh dashboard
+            st.session_state['refresh_dashboard'] = True
+            
+            # Force immediate reload of dates
+            get_available_dates(force_refresh=True)
+            
+            # Set active tab to Overview
+            st.session_state['active_tab'] = 0
+            
+            # Trigger a rerun
+            st.rerun()
+            
             return True
             
         except Exception as e:
@@ -345,9 +358,6 @@ def import_database(uploaded_file):
             # Clean up temporary files
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
-    elif confirmation and confirmation != "CONFIRM IMPORT":
-        st.error("Confirmation text does not match 'CONFIRM IMPORT'")
-        return False
     
     return False
 
@@ -457,14 +467,23 @@ def save_to_db(df):
 # Get all available dates in the database with force refresh option
 @st.cache_data(ttl=300, show_spinner="Loading available dates...")
 def get_available_dates(force_refresh=False):
-    # Force parameter is just to invalidate cache when needed
+    """
+    Get all available dates in the database with force refresh option
+    
+    Parameters:
+    force_refresh (bool): Flag to force cache refresh (doesn't affect logic, just invalidates cache)
+    
+    Returns:
+    list: List of available dates in database
+    """
     conn = init_db()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT date(Date) FROM production_data ORDER BY Date DESC")
         dates = [row[0] for row in cursor.fetchall()]
         return dates
-    except sqlite3.Error:
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
         return []
     finally:
         conn.close()
@@ -1308,21 +1327,16 @@ def main():
                         export_database()
                     
                     # Import functionality
+                    st.subheader("Import Database")
                     uploaded_db = st.file_uploader(
-                        "Import database file", 
+                        "Upload database file (.db, .sqlite)", 
                         type=['db', 'sqlite', 'sqlite3'],
                         accept_multiple_files=False,
                         key="db_uploader"
                     )
                     
                     if uploaded_db is not None:
-                        if st.button("Import Database", type="primary"):
-                            success = import_database(uploaded_db)
-                            if success:
-                                # Force reload date list and refresh dashboard
-                                st.cache_data.clear()
-                                st.session_state['refresh_dashboard'] = True
-                                st.rerun()
+                        import_database(uploaded_db)
             
             # Data selection - Right column
             with col2:
