@@ -15,6 +15,7 @@ from datetime import timedelta
 import shutil
 import tempfile
 import os
+import time
 from statsmodels.tsa.arima.model import ARIMA
 from prophet import Prophet
 
@@ -264,8 +265,6 @@ def manage_saved_data():
     
     return None
 
-
-# Improved database reset function with confirmation
 def reset_database():
     """
     Completely reset the database (use with caution)
@@ -287,7 +286,21 @@ def reset_database():
         
         conn.commit()
         conn.close()
+        
+        # Clear all cached data
+        st.cache_data.clear()
+        
+        # Clear the confirmation input
+        st.session_state.pop("reset_confirmation", None)
+        
+        # Clear the date dropdown selection
+        if 'date_dropdown' in st.session_state:
+            st.session_state.pop('date_dropdown')
+        
         st.sidebar.success("Database has been completely reset!")
+        
+        # Add small delay before rerun
+        time.sleep(1)
         st.rerun()
     elif confirmation and confirmation != "CONFIRM":
         st.sidebar.error("Confirmation text does not match 'CONFIRM'")
@@ -305,7 +318,7 @@ def import_database(uploaded_file):
     # Add confirmation to prevent accidental imports
     confirmation = st.checkbox("I confirm I want to replace the current database")
     
-    if confirmation:
+    if confirmation and uploaded_file is not None:
         try:
             # Save the uploaded file to a temporary location
             with tempfile.NamedTemporaryFile(delete=False, suffix='.db') as tmp:
@@ -334,8 +347,8 @@ def import_database(uploaded_file):
             # Clear cache to force reload
             st.cache_data.clear()
             
-            # Set the flag to refresh dashboard
-            st.session_state['refresh_dashboard'] = True
+            # Clear the file uploader state
+            st.session_state.pop("db_uploader", None)
             
             # Force immediate reload of dates
             get_available_dates(force_refresh=True)
