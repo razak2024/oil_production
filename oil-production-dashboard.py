@@ -1316,6 +1316,10 @@ def train_production_model(X, y, model_type="Random Forest"):
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
     from sklearn.preprocessing import StandardScaler
     
+    # First, ensure we have valid data
+    X = X.fillna(0)  # Fill NaN values with 0
+    y = y.fillna(0)  # Fill NaN values with 0
+    
     # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
@@ -1341,10 +1345,15 @@ def train_production_model(X, y, model_type="Random Forest"):
     
     # Evaluate
     y_pred = model.predict(X_test)
+    
+    # Ensure we have valid predictions
+    y_pred = np.nan_to_num(y_pred, nan=0, posinf=0, neginf=0)
+    y_test = np.nan_to_num(y_test, nan=0, posinf=0, neginf=0)
+    
     metrics = {
         'r2': r2_score(y_test, y_pred),
         'mae': mean_absolute_error(y_test, y_pred),
-        'rmse': mean_squared_error(y_test, y_pred, squared=False)
+        'rmse': np.sqrt(mean_squared_error(y_test, y_pred))  # Calculate RMSE manually
     }
     
     return model, metrics
