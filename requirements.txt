@@ -6,5 +6,5 @@ joblib
 plotly
 statsmodels
 prophet
-openpy
+openpyxl
 xgboost
