@@ -1289,6 +1289,66 @@ def create_decline_plots(historical_df, wells=None, n_wells=5):
     
     return plots
 
+def feature_engineering(df):
+    """Create features for machine learning model"""
+    df = df.copy()
+    
+    # Convert test production to daily rate
+    df['Test_Production'] = df['Q Huile Test (Sm³/h)'] * 24
+    
+    # Calculate choke change from test
+    df['Choke_Change'] = df['Duse (mm)'] - df['Duse Test (mm)']
+    
+    # Days since last test
+    df['Days_Since_Test'] = (df['Date'] - df['Date'].shift(1)).dt.days
+    
+    # Fill missing values
+    df = df.fillna(method='ffill').fillna(0)
+    
+    return df
+
+def train_production_model(X, y, model_type="Random Forest"):
+    """Train a production prediction model"""
+    from sklearn.model_selection import train_test_split
+    from sklearn.ensemble import RandomForestRegressor
+    from xgboost import XGBRegressor
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    from sklearn.preprocessing import StandardScaler
+    
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42
+    )
+    
+    # Model selection
+    if model_type == "Random Forest":
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+    elif model_type == "XGBoost":
+        model = XGBRegressor(n_estimators=100, random_state=42)
+    else:  # Neural Network
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+        model = MLPRegressor(
+            hidden_layer_sizes=(100, 50),
+            max_iter=500,
+            random_state=42
+        )
+    
+    # Train model
+    model.fit(X_train, y_train)
+    
+    # Evaluate
+    y_pred = model.predict(X_test)
+    metrics = {
+        'r2': r2_score(y_test, y_pred),
+        'mae': mean_absolute_error(y_test, y_pred),
+        'rmse': mean_squared_error(y_test, y_pred, squared=False)
+    }
+    
+    return model, metrics
+
 # Main application function
 def main():
     # Sidebar with data management
@@ -1463,6 +1523,7 @@ def main():
             "📈 Production Trends", 
             "🔮 Forecasting", 
             "💧 Well Washing",
+            "🤖 ML Production Predictor" ,
             "📋 Data View"
         ]
         
@@ -2178,8 +2239,176 @@ def main():
             else:
                 st.info("No historical data available for washing analysis")
         
-        # Data View Tab
+        # Choke Performance Tab
         with tabs[5]:
+            st.header("🤖 Machine Learning Production Predictor")
+            
+            if not historical_df.empty:
+                # Select well for prediction
+                well_list = historical_df['Puits'].unique().tolist()
+                selected_well = st.selectbox(
+                    "Select Well for Production Prediction",
+                    options=well_list,
+                    key="ml_well_select"
+                )
+                
+                # Filter data for selected well
+                well_data = historical_df[historical_df['Puits'] == selected_well].copy()
+                well_data = well_data.sort_values('Date')
+                
+                # Check for required columns
+                required_cols = [
+                    'Date', 'Duse (mm)', 'Pt (bar)', 'Pp (bar)', 
+                    'Q Huile Corr (Sm³/j)', 'Duse Test (mm)',
+                    'Q Huile Test (Sm³/h)'
+                ]
+                
+                if all(col in well_data.columns for col in required_cols):
+                    # Feature Engineering
+                    well_data = feature_engineering(well_data)
+                    
+                    # Train/test split
+                    X = well_data[['Duse (mm)', 'Pt (bar)', 'Pp (bar)', 
+                                  'Duse Test (mm)', 'Test_Production', 
+                                  'Choke_Change', 'Days_Since_Test']]
+                    y = well_data['Q Huile Corr (Sm³/j)']
+                    
+                    # Model training interface
+                    st.subheader("Model Configuration")
+                    model_type = st.selectbox(
+                        "Select Model Type",
+                        options=["Random Forest", "XGBoost", "Neural Network"],
+                        index=0
+                    )
+                    
+                    if st.button("Train Production Prediction Model"):
+                        with st.spinner("Training model..."):
+                            # Train model
+                            model, metrics = train_production_model(X, y, model_type)
+                            
+                            # Save model
+                            joblib.dump(model, f"prod_pred_model_{selected_well}.joblib")
+                            st.session_state['trained_model'] = model
+                            st.session_state['model_metrics'] = metrics
+                            st.session_state['model_features'] = X.columns.tolist()
+                            
+                            st.success("Model trained successfully!")
+                    
+                    # Show model results if available
+                    if 'trained_model' in st.session_state:
+                        st.subheader("Model Performance")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("R² Score", f"{st.session_state['model_metrics']['r2']:.3f}")
+                        
+                        with col2:
+                            st.metric("MAE", f"{st.session_state['model_metrics']['mae']:.2f} Sm³/j")
+                        
+                        with col3:
+                            st.metric("RMSE", f"{st.session_state['model_metrics']['rmse']:.2f} Sm³/j")
+                        
+                        # Feature importance
+                        if hasattr(st.session_state['trained_model'], 'feature_importances_'):
+                            st.subheader("Feature Importance")
+                            features = st.session_state['model_features']
+                            importances = st.session_state['trained_model'].feature_importances_
+                            
+                            fig = px.bar(
+                                x=features,
+                                y=importances,
+                                labels={'x': 'Features', 'y': 'Importance'},
+                                title='Feature Importance'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Prediction interface
+                    st.subheader("Production Prediction")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        current_choke = st.number_input(
+                            "Current Choke Size (mm)",
+                            min_value=0.0,
+                            max_value=50.0,
+                            value=float(well_data['Duse (mm)'].iloc[-1]),
+                            step=0.5
+                        )
+                        
+                        whp = st.number_input(
+                            "Wellhead Pressure (bar)",
+                            min_value=0.0,
+                            max_value=500.0,
+                            value=float(well_data['Pt (bar)'].iloc[-1]),
+                            step=1.0
+                        )
+                    
+                    with col2:
+                        test_choke = st.number_input(
+                            "Test Choke Size (mm)",
+                            min_value=0.0,
+                            max_value=50.0,
+                            value=float(well_data['Duse Test (mm)'].iloc[-1]),
+                            step=0.5
+                        )
+                        
+                        flp = st.number_input(
+                            "Flowline Pressure (bar)",
+                            min_value=0.0,
+                            max_value=500.0,
+                            value=float(well_data['Pp (bar)'].iloc[-1]),
+                            step=1.0
+                        )
+                    
+                    with col3:
+                        test_prod = st.number_input(
+                            "Test Production (Sm³/h)",
+                            min_value=0.0,
+                            max_value=500.0,
+                            value=float(well_data['Q Huile Test (Sm³/h)'].iloc[-1]),
+                            step=1.0
+                        )
+                        
+                        days_since_test = st.number_input(
+                            "Days Since Last Test",
+                            min_value=0,
+                            max_value=365,
+                            value=int((pd.to_datetime('today') - well_data['Date'].iloc[-1]).days),
+                            step=1
+                        )
+                    
+                    if st.button("Predict Production"):
+                        if 'trained_model' in st.session_state:
+                            # Prepare input features
+                            input_data = pd.DataFrame([[
+                                current_choke, whp, flp, 
+                                test_choke, test_prod * 24,  # Convert to daily
+                                current_choke - test_choke,  # Choke change
+                                days_since_test
+                            ]], columns=st.session_state['model_features'])
+                            
+                            # Make prediction
+                            prediction = st.session_state['trained_model'].predict(input_data)[0]
+                            
+                            # Display results
+                            st.success(f"Predicted Production: {prediction:.2f} Sm³/j")
+                            
+                            # Compare with theoretical
+                            K = well_data['Coef K'].mean() if 'Coef K' in well_data.columns else 0.1
+                            theoretical = K * current_choke**2 * (whp - flp)**0.5
+                            efficiency = (prediction / theoretical) * 100
+                            
+                            st.metric("Theoretical Production", f"{theoretical:.2f} Sm³/j")
+                            st.metric("Predicted Efficiency", f"{efficiency:.1f}%")
+                        else:
+                            st.warning("Please train a model first")
+                else:
+                    st.warning("Missing required columns for production prediction")
+            else:
+                st.info("No historical data available for modeling")
+        
+        # Data View Tab
+        with tabs[6]:
             st.header("Raw Data View")
             
             if not df.empty:
