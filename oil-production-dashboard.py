@@ -1564,7 +1564,7 @@ def ml_production_tab(historical_df):
         well_stats_df = pd.DataFrame(well_stats).sort_values('Data Points', ascending=False)
         
         # Display wells with enough data for modeling
-        valid_wells = well_stats_df[well_stats_df['Data Points'] >= 7]['Well'].tolist()
+        valid_wells = well_stats_df[well_stats_df['Data Points'] >= 2]['Well'].tolist()
         
         if not valid_wells:
             st.warning("No wells have sufficient data for reliable modeling (minimum 10 data points needed)")
