@@ -1289,74 +1289,1010 @@ def create_decline_plots(historical_df, wells=None, n_wells=5):
     
     return plots
 
-def feature_engineering(df):
-    """Create features for machine learning model"""
-    df = df.copy()
+# Enhanced feature engineering function
+def enhanced_feature_engineering(df):
+    """
+    Create advanced engineered features for better production prediction
     
-    # Convert test production to daily rate
-    df['Test_Production'] = df['Q Huile Test (Sm³/h)'] * 24
+    Parameters:
+    df (pandas.DataFrame): DataFrame containing well production data
     
-    # Calculate choke change from test
-    df['Choke_Change'] = df['Duse (mm)'] - df['Duse Test (mm)']
+    Returns:
+    pandas.DataFrame: DataFrame with additional engineered features
+    """
+    data = df.copy()
     
-    # Days since last test
-    df['Days_Since_Test'] = (df['Date'] - df['Date'].shift(1)).dt.days
+    # Basic features from current implementation
+    if 'Q Huile Test (Sm³/h)' in data.columns:
+        data['Test_Production'] = data['Q Huile Test (Sm³/h)'] * 24  # Convert hourly to daily
     
-    # Fill missing values
-    df = df.fillna(method='ffill').fillna(0)
+    data['Choke_Change'] = data['Duse (mm)'].diff()
+    data['Days_Since_Test'] = (data['Date'] - pd.to_datetime(data['Date Dernier Test'])).dt.days
     
-    return df
+    # New advanced features
+    
+    # Pressure differential features
+    data['Pressure_Differential'] = data['Pt (bar)'] - data['Pp (bar)']
+    data['Normalized_Pressure_Diff'] = data['Pressure_Differential'] / data['Pt (bar)']
+    
+    # Theoretical flow calculation based on choke physics
+    if 'Coef K' in data.columns:
+        data['K_Factor'] = data['Coef K']
+    else:
+        # Default K factor if not available
+        data['K_Factor'] = 0.1
+    
+    data['Theoretical_Flow'] = data['K_Factor'] * (data['Duse (mm)']**2) * (data['Pressure_Differential']**0.5)
+    data['Flow_Efficiency'] = data['Q Huile Corr (Sm³/j)'] / data['Theoretical_Flow']
+    
+    # Time-based features
+    data['Days_From_First_Production'] = (data['Date'] - data['Date'].min()).dt.days
+    
+    # Production decline indicators
+    data['Production_Change'] = data['Q Huile Corr (Sm³/j)'].pct_change()
+    data['Production_Trend'] = data['Q Huile Corr (Sm³/j)'].rolling(window=5, min_periods=1).mean()
+    data['Production_Volatility'] = data['Q Huile Corr (Sm³/j)'].rolling(window=5, min_periods=1).std()
+    
+    # Fluid ratio features if available
+    if all(col in data.columns for col in ['Q Gaz Tot Corr (Sm³/j)', 'Q Eau Tot Corr (m³/j)']):
+        # Gas-Oil Ratio
+        data['GOR'] = data['Q Gaz Tot Corr (Sm³/j)'] / data['Q Huile Corr (Sm³/j)']
+        data['GOR'].replace([np.inf, -np.inf], np.nan, inplace=True)
+        data['GOR'] = data['GOR'].fillna(method='ffill')
+        
+        # Water-Oil Ratio
+        data['WOR'] = data['Q Eau Tot Corr (m³/j)'] / data['Q Huile Corr (Sm³/j)']
+        data['WOR'].replace([np.inf, -np.inf], np.nan, inplace=True)
+        data['WOR'] = data['WOR'].fillna(method='ffill')
+        
+        # Total fluid production
+        data['Total_Fluid'] = data['Q Huile Corr (Sm³/j)'] + data['Q Eau Tot Corr (m³/j)']
+    
+    # Operating hours and efficiency
+    if 'Heures de marche' in data.columns:
+        data['Operating_Hours'] = data['Heures de marche']
+        data['Daily_Efficiency'] = data['Operating_Hours'] / 24.0
+        data['Production_Per_Hour'] = data['Q Huile Corr (Sm³/j)'] / data['Operating_Hours'].replace(0, np.nan)
+        data['Production_Per_Hour'].replace([np.inf, -np.inf], np.nan, inplace=True)
+        data['Production_Per_Hour'] = data['Production_Per_Hour'].fillna(method='ffill')
+    
+    # Handle any NaN values from calculations
+    numeric_cols = data.select_dtypes(include=['float64', 'int64']).columns
+    data[numeric_cols] = data[numeric_cols].fillna(method='ffill')
+    data[numeric_cols] = data[numeric_cols].fillna(0)  # Fill any remaining NaNs
+    
+    return data
 
-def train_production_model(X, y, model_type="Random Forest"):
-    """Train a production prediction model"""
-    from sklearn.model_selection import train_test_split
-    from sklearn.ensemble import RandomForestRegressor
-    from xgboost import XGBRegressor
+# Enhanced model training with hyperparameter tuning
+def enhanced_train_production_model(X, y, model_type="Random Forest", perform_tuning=False):
+    """
+    Train a production prediction model with advanced techniques
+    
+    Parameters:
+    X (pandas.DataFrame): Feature matrix
+    y (pandas.Series): Target variable
+    model_type (str): Type of model to train
+    perform_tuning (bool): Whether to perform hyperparameter tuning
+    
+    Returns:
+    tuple: (model, metrics, feature_importances)
+    """
+    from sklearn.model_selection import train_test_split, GridSearchCV
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
     from sklearn.neural_network import MLPRegressor
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import StandardScaler, RobustScaler
+    from sklearn.pipeline import Pipeline
+    import xgboost as xgb
     
-    # First, ensure we have valid data
-    X = X.fillna(0)  # Fill NaN values with 0
-    y = y.fillna(0)  # Fill NaN values with 0
-    
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    
-    # Model selection
-    if model_type == "Random Forest":
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-    elif model_type == "XGBoost":
-        model = XGBRegressor(n_estimators=100, random_state=42)
-    else:  # Neural Network
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-        model = MLPRegressor(
-            hidden_layer_sizes=(100, 50),
-            max_iter=500,
-            random_state=42
+    # Train/test split with stratification based on quartiles if possible
+    try:
+        y_quartiles = pd.qcut(y, 4, labels=False)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y_quartiles
+        )
+    except:
+        # Fallback if stratification fails (e.g., not enough data)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
         )
     
-    # Train model
-    model.fit(X_train, y_train)
+    # Identify numerical features for scaling
+    X.select_dtypes(include=['float64', 'int64']).columns.tolist()
+    
+    # Model selection with pipelines and hyperparameter tuning
+    if model_type == "Random Forest":
+        if perform_tuning:
+            pipeline = Pipeline([
+                ('scaler', RobustScaler()),
+                ('model', RandomForestRegressor(random_state=42))
+            ])
+            
+            param_grid = {
+                'model__n_estimators': [50, 100, 200],
+                'model__max_depth': [None, 10, 20, 30],
+                'model__min_samples_split': [2, 5, 10],
+                'model__min_samples_leaf': [1, 2, 4]
+            }
+            
+            model = GridSearchCV(pipeline, param_grid, cv=5, scoring='neg_mean_squared_error')
+        else:
+            model = Pipeline([
+                ('scaler', RobustScaler()),
+                ('model', RandomForestRegressor(n_estimators=100, random_state=42))
+            ])
+            
+    elif model_type == "XGBoost":
+        if perform_tuning:
+            pipeline = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', xgb.XGBRegressor(random_state=42))
+            ])
+            
+            param_grid = {
+                'model__n_estimators': [50, 100, 200],
+                'model__max_depth': [3, 6, 9],
+                'model__learning_rate': [0.01, 0.1, 0.2],
+                'model__subsample': [0.8, 0.9, 1.0]
+            }
+            
+            model = GridSearchCV(pipeline, param_grid, cv=5, scoring='neg_mean_squared_error')
+        else:
+            model = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', xgb.XGBRegressor(n_estimators=100, random_state=42))
+            ])
+            
+    elif model_type == "Gradient Boosting":
+        if perform_tuning:
+            pipeline = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', GradientBoostingRegressor(random_state=42))
+            ])
+            
+            param_grid = {
+                'model__n_estimators': [50, 100, 200],
+                'model__max_depth': [3, 5, 7],
+                'model__learning_rate': [0.01, 0.1, 0.2],
+                'model__subsample': [0.8, 0.9, 1.0]
+            }
+            
+            model = GridSearchCV(pipeline, param_grid, cv=5, scoring='neg_mean_squared_error')
+        else:
+            model = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', GradientBoostingRegressor(n_estimators=100, random_state=42))
+            ])
+            
+    else:  # Neural Network
+        if perform_tuning:
+            pipeline = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', MLPRegressor(max_iter=1000, random_state=42))
+            ])
+            
+            param_grid = {
+                'model__hidden_layer_sizes': [(50,), (100,), (50, 25), (100, 50)],
+                'model__alpha': [0.0001, 0.001, 0.01],
+                'model__learning_rate_init': [0.001, 0.01],
+                'model__activation': ['relu', 'tanh']
+            }
+            
+            model = GridSearchCV(pipeline, param_grid, cv=5, scoring='neg_mean_squared_error')
+        else:
+            model = Pipeline([
+                ('scaler', StandardScaler()),
+                ('model', MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42))
+            ])
+    
+    # Train model with progress tracking
+    with st.spinner(f"Training {model_type} model..." + 
+                   (" with hyperparameter tuning (this may take a while)" if perform_tuning else "")):
+        model.fit(X_train, y_train)
+    
+    # Extract best model if using GridSearchCV
+    if perform_tuning:
+        st.write(f"Best parameters: {model.best_params_}")
+        if hasattr(model, 'best_estimator_'):
+            best_model = model.best_estimator_
+        else:
+            best_model = model
+    else:
+        best_model = model
     
     # Evaluate
-    y_pred = model.predict(X_test)
-    
-    # Ensure we have valid predictions
-    y_pred = np.nan_to_num(y_pred, nan=0, posinf=0, neginf=0)
-    y_test = np.nan_to_num(y_test, nan=0, posinf=0, neginf=0)
-    
+    y_pred = best_model.predict(X_test)
     metrics = {
         'r2': r2_score(y_test, y_pred),
         'mae': mean_absolute_error(y_test, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y_test, y_pred))  # Calculate RMSE manually
+        'rmse': mean_squared_error(y_test, y_pred, squared=False),
+        'mape': np.mean(np.abs((y_test - y_pred) / y_test)) * 100 if not np.any(y_test == 0) else np.nan
     }
     
-    return model, metrics
+    # Get feature importances if available
+    feature_importances = None
+    if hasattr(best_model, 'named_steps') and hasattr(best_model.named_steps['model'], 'feature_importances_'):
+        feature_importances = pd.DataFrame({
+            'feature': X.columns,
+            'importance': best_model.named_steps['model'].feature_importances_
+        }).sort_values('importance', ascending=False)
+    elif not perform_tuning and hasattr(model.named_steps['model'], 'feature_importances_'):
+        feature_importances = pd.DataFrame({
+            'feature': X.columns,
+            'importance': model.named_steps['model'].feature_importances_
+        }).sort_values('importance', ascending=False)
+    
+    return best_model, metrics, feature_importances
+
+# Improved Choke Performance / ML Tab
+def ml_production_tab(historical_df):
+    import streamlit as st
+    import pandas as pd
+    import numpy as np
+    import plotly.express as px
+    import plotly.graph_objects as go
+    import os
+    import joblib
+    
+    st.header("🤖 Advanced Machine Learning Production Predictor")
+    
+    if historical_df.empty:
+        st.warning("No historical data available. Please upload data first.")
+        return
+        
+    # Setup tab structure for organizing content
+    ml_tabs = st.tabs(["Model Training", "Production Prediction", "Time Series Forecasting"])
+    
+    with ml_tabs[0]:  # Model Training tab
+        st.subheader("Train Production Model")
+        
+        # Well selection with metrics
+        well_list = historical_df['Puits'].unique().tolist()
+        
+        # Show well statistics to help selection
+        well_stats = []
+        for well in well_list:
+            well_data = historical_df[historical_df['Puits'] == well]
+            stats = {
+                'Well': well,
+                'Data Points': len(well_data),
+                'Latest Production': well_data['Q Huile Corr (Sm³/j)'].iloc[-1] if not well_data.empty else 0,
+                'Latest Date': well_data['Date'].max() if not well_data.empty else None
+            }
+            well_stats.append(stats)
+        
+        well_stats_df = pd.DataFrame(well_stats).sort_values('Data Points', ascending=False)
+        
+        # Display wells with enough data for modeling
+        valid_wells = well_stats_df[well_stats_df['Data Points'] >= 10]['Well'].tolist()
+        
+        if not valid_wells:
+            st.warning("No wells have sufficient data for reliable modeling (minimum 10 data points needed)")
+            return
+        
+        # Select well with sufficient data
+        selected_well = st.selectbox(
+            "Select Well for Production Prediction",
+            options=valid_wells,
+            key="ml_well_select",
+            help="Select a well with at least 10 data points for reliable modeling"
+        )
+        
+        # Filter data for selected well
+        well_data = historical_df[historical_df['Puits'] == selected_well].copy()
+        well_data = well_data.sort_values('Date')
+        
+        # Display data statistics
+        st.write("**Well Data Statistics:**")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Data Points", len(well_data))
+        with col2:
+            st.metric("Date Range", f"{well_data['Date'].min().strftime('%Y-%m-%d')} to {well_data['Date'].max().strftime('%Y-%m-%d')}")
+        with col3:
+            st.metric("Avg. Production", f"{well_data['Q Huile Corr (Sm³/j)'].mean():.2f} Sm³/j")
+        with col4:
+            st.metric("Latest Production", f"{well_data['Q Huile Corr (Sm³/j)'].iloc[-1]:.2f} Sm³/j")
+        
+        # Feature Engineering - check required columns are present
+        required_cols = [
+            'Date', 'Duse (mm)', 'Pt (bar)', 'Pp (bar)', 
+            'Q Huile Corr (Sm³/j)'
+        ]
+        
+        if all(col in well_data.columns for col in required_cols):
+            # Apply enhanced feature engineering
+            with st.spinner("Engineering features..."):
+                well_data = enhanced_feature_engineering(well_data)
+            
+            # Feature selection
+            st.subheader("Feature Selection")
+            
+            # Identify all potential features
+            numeric_cols = well_data.select_dtypes(include=['float64', 'int64']).columns.tolist()
+            potential_features = [col for col in numeric_cols if col != 'Q Huile Corr (Sm³/j)' 
+                                 and not pd.isna(well_data[col]).all()]
+            
+            # Remove highly correlated features
+            if len(potential_features) > 1:
+                corr_matrix = well_data[potential_features].corr().abs()
+                upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+                to_drop = [column for column in upper.columns if any(upper[column] > 0.95)]
+                potential_features = [col for col in potential_features if col not in to_drop]
+            
+            # Let user select features
+            selected_features = st.multiselect(
+                "Select Features for Model Training",
+                options=potential_features,
+                default=[
+                    'Duse (mm)', 'Pt (bar)', 'Pp (bar)', 'Pressure_Differential',
+                    'Theoretical_Flow', 'Days_From_First_Production'
+                ] if all(f in potential_features for f in [
+                    'Duse (mm)', 'Pt (bar)', 'Pp (bar)', 'Pressure_Differential',
+                    'Theoretical_Flow', 'Days_From_First_Production'
+                ]) else potential_features[:min(6, len(potential_features))],
+                help="Select features to include in the prediction model"
+            )
+            
+            if len(selected_features) < 2:
+                st.warning("Please select at least 2 features for modeling")
+            else:
+                # Model configuration
+                st.subheader("Model Configuration")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    model_type = st.selectbox(
+                        "Select Model Type",
+                        options=["Random Forest", "XGBoost", "Gradient Boosting", "Neural Network"],
+                        index=0,
+                        help="Choose the type of machine learning model to use"
+                    )
+                
+                with col2:
+                    hyperparameter_tuning = st.checkbox(
+                        "Perform Hyperparameter Tuning", 
+                        value=False,
+                        help="Enables grid search for optimal model parameters (takes longer to train)"
+                    )
+                
+                # Prepare data
+                X = well_data[selected_features].copy()
+                y = well_data['Q Huile Corr (Sm³/j)'].copy()
+                
+                # Check for data quality
+                if X.isna().any().any():
+                    st.warning("Selected features contain missing values. These will be filled with forward fill and zeros.")
+                
+                # Train model button
+                if st.button("Train Production Prediction Model", type="primary"):
+                    try:
+                        # Train model
+                        model, metrics, feature_importances = enhanced_train_production_model(
+                            X, y, model_type, hyperparameter_tuning
+                        )
+                        
+                        # Save model
+                        model_file = f"prod_pred_model_{selected_well}.joblib"
+                        joblib.dump(model, model_file)
+                        
+                        # Store model info in session state
+                        st.session_state['trained_model'] = model
+                        st.session_state['model_metrics'] = metrics
+                        st.session_state['model_features'] = selected_features
+                        st.session_state['feature_importances'] = feature_importances
+                        
+                        st.success(f"Model trained successfully and saved as {model_file}!")
+                        
+                        # Show model performance
+                        st.subheader("Model Performance")
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("R² Score", f"{metrics['r2']:.3f}")
+                        
+                        with col2:
+                            st.metric("MAE", f"{metrics['mae']:.2f} Sm³/j")
+                        
+                        with col3:
+                            st.metric("RMSE", f"{metrics['rmse']:.2f} Sm³/j")
+                        
+                        with col4:
+                            if not np.isnan(metrics.get('mape', np.nan)):
+                                st.metric("MAPE", f"{metrics['mape']:.2f}%")
+                        
+                        # Feature importance
+                        if feature_importances is not None:
+                            st.subheader("Feature Importance")
+                            
+                            fig = px.bar(
+                                feature_importances,
+                                x='feature',
+                                y='importance',
+                                labels={'feature': 'Features', 'importance': 'Importance'},
+                                title='Feature Importance'
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show example predictions vs actual
+                        st.subheader("Model Validation")
+                        
+                        # Get predictions for historical data
+                        historical_preds = model.predict(X)
+                        validation_df = pd.DataFrame({
+                            'Date': well_data['Date'],
+                            'Actual': y,
+                            'Predicted': historical_preds
+                        })
+                        
+                        # Plot actual vs predicted
+                        fig = px.line(
+                            validation_df, x='Date', 
+                            y=['Actual', 'Predicted'],
+                            labels={'value': 'Production (Sm³/j)', 'variable': ''},
+                            title='Actual vs Predicted Production'
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show error distribution
+                        validation_df['Error'] = validation_df['Actual'] - validation_df['Predicted']
+                        validation_df['Error_Percent'] = (validation_df['Error'] / validation_df['Actual']) * 100
+                        
+                        fig = px.histogram(
+                            validation_df, x='Error',
+                            title='Prediction Error Distribution',
+                            labels={'Error': 'Error (Sm³/j)', 'count': 'Frequency'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                    except Exception as e:
+                        st.error(f"Error training model: {str(e)}")
+            
+                # Load existing model
+                model_file = f"prod_pred_model_{selected_well}.joblib"
+                if os.path.exists(model_file) and 'trained_model' not in st.session_state:
+                    if st.button("Load Existing Model"):
+                        try:
+                            model = joblib.load(model_file)
+                            st.session_state['trained_model'] = model
+                            st.session_state['model_features'] = selected_features
+                            st.success("Existing model loaded successfully!")
+                        except Exception as e:
+                            st.error(f"Error loading model: {str(e)}")
+        else:
+            missing_cols = [col for col in required_cols if col not in well_data.columns]
+            st.error(f"Missing required columns for production prediction: {', '.join(missing_cols)}")
+    
+    with ml_tabs[1]:  # Production Prediction tab
+        st.subheader("Oil Production Prediction")
+        
+        if 'trained_model' in st.session_state:
+            # Get model features
+            model_features = st.session_state['model_features']
+            
+            # Create dynamic form based on model features
+            st.write("Enter parameters for prediction:")
+            
+            # Organize input fields by categories
+            choke_features = [f for f in model_features if 'Duse' in f or 'Choke' in f]
+            pressure_features = [f for f in model_features if 'bar' in f or 'Pressure' in f]
+            time_features = [f for f in model_features if 'Days' in f or 'Time' in f]
+            other_features = [f for f in model_features if f not in choke_features + pressure_features + time_features]
+            
+            # Create input form with better organization
+            input_values = {}
+            
+            # First row - choke features
+            if choke_features:
+                st.write("**Choke Parameters:**")
+                cols = st.columns(min(3, len(choke_features)))
+                for i, feature in enumerate(choke_features):
+                    try:
+                        default_value = float(well_data[feature].iloc[-1])
+                    except:
+                        default_value = 0.0
+                    
+                    input_values[feature] = cols[i % len(cols)].number_input(
+                        f"{feature}",
+                        min_value=0.0,
+                        value=default_value,
+                        step=0.5
+                    )
+            
+            # Second row - pressure features
+            if pressure_features:
+                st.write("**Pressure Parameters:**")
+                cols = st.columns(min(3, len(pressure_features)))
+                for i, feature in enumerate(pressure_features):
+                    try:
+                        default_value = float(well_data[feature].iloc[-1])
+                    except:
+                        default_value = 0.0
+                    
+                    input_values[feature] = cols[i % len(cols)].number_input(
+                        f"{feature}",
+                        min_value=0.0,
+                        value=default_value,
+                        step=1.0
+                    )
+            
+            # Third row - time features
+            if time_features:
+                st.write("**Time Parameters:**")
+                cols = st.columns(min(3, len(time_features)))
+                for i, feature in enumerate(time_features):
+                    try:
+                        default_value = float(well_data[feature].iloc[-1])
+                    except:
+                        default_value = 0.0
+                    
+                    input_values[feature] = cols[i % len(cols)].number_input(
+                        f"{feature}",
+                        min_value=0.0,
+                        value=default_value,
+                        step=1.0
+                    )
+            
+            # Fourth row - other features
+            if other_features:
+                st.write("**Other Parameters:**")
+                cols = st.columns(min(3, len(other_features)))
+                for i, feature in enumerate(other_features):
+                    try:
+                        default_value = float(well_data[feature].iloc[-1])
+                    except:
+                        default_value = 0.0
+                    
+                    input_values[feature] = cols[i % len(cols)].number_input(
+                        f"{feature}",
+                        min_value=0.0,
+                        value=default_value,
+                        step=1.0
+                    )
+            
+            # Predict button
+            if st.button("Predict Production", key="predict_button"):
+                try:
+                    # Create input dataframe
+                    input_df = pd.DataFrame([input_values], columns=model_features)
+                    
+                    # Make prediction
+                    prediction = st.session_state['trained_model'].predict(input_df)[0]
+                    
+                    # Display results
+                    st.success(f"Predicted Production: {prediction:.2f} Sm³/j")
+                    
+                    # Create gauge chart for visual feedback
+                    max_production = well_data['Q Huile Corr (Sm³/j)'].max() * 1.2  # 20% more than max historical
+                    
+                    fig = go.Figure(go.Indicator(
+                        mode="gauge+number",
+                        value=prediction,
+                        domain={'x': [0, 1], 'y': [0, 1]},
+                        gauge={
+                            'axis': {'range': [0, max_production]},
+                            'bar': {'color': "#2563EB"},
+                            'steps': [
+                                {'range': [0, max_production * 0.33], 'color': "#FECACA"},
+                                {'range': [max_production * 0.33, max_production * 0.66], 'color': "#FEF3C7"},
+                                {'range': [max_production * 0.66, max_production], 'color': "#DCFCE7"}
+                            ],
+                            'threshold': {
+                                'line': {'color': "red", 'width': 4},
+                                'thickness': 0.75,
+                                'value': well_data['Q Huile Corr (Sm³/j)'].iloc[-1]
+                            }
+                        },
+                        title={'text': "Predicted Production (Sm³/j)"}
+                    ))
+                    
+                    fig.update_layout(height=300)
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Compare with theoretical production if applicable
+                    if all(f in well_data.columns for f in ['Duse (mm)', 'Pt (bar)', 'Pp (bar)', 'Coef K']):
+                        K = well_data['Coef K'].mean()
+                        duse = input_values.get('Duse (mm)', 0)
+                        pt = input_values.get('Pt (bar)', 0)
+                        pp = input_values.get('Pp (bar)', 0)
+                        
+                        theoretical = K * duse**2 * max(0, (pt - pp))**0.5
+                        efficiency = (prediction / theoretical) * 100 if theoretical > 0 else 0
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("Theoretical Production", f"{theoretical:.2f} Sm³/j")
+                        with col2:
+                            st.metric("Production Efficiency", f"{efficiency:.1f}%")
+                    
+                    # What-if analysis
+                    st.subheader("What-If Analysis")
+                    st.write("See how changing parameters affects production:")
+                    
+                    # Allow user to select parameter to vary
+                    vary_param = st.selectbox(
+                        "Select parameter to vary:",
+                        options=model_features,
+                        index=0 if model_features else None
+                    )
+                    
+                    if vary_param:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            min_val = st.number_input(
+                                "Minimum value", 
+                                value=float(input_values[vary_param]) * 0.5
+                            )
+                        with col2:
+                            max_val = st.number_input(
+                                "Maximum value", 
+                                value=float(input_values[vary_param]) * 1.5
+                            )
+                        with col3:
+                            steps = st.number_input("Number of steps", value=10, min_value=2)
+                        
+                        if st.button("Generate What-If Analysis"):
+                            # Create range of values
+                            param_range = np.linspace(min_val, max_val, int(steps))
+                            
+                            # Generate predictions for each value
+                            what_if_results = []
+                            for val in param_range:
+                                # Copy input values and update varied parameter
+                                varied_inputs = input_values.copy()
+                                varied_inputs[vary_param] = val
+                                
+                                # Create input dataframe
+                                input_df = pd.DataFrame([varied_inputs], columns=model_features)
+                                
+                                # Make prediction
+                                pred = st.session_state['trained_model'].predict(input_df)[0]
+                                
+                                # Save results
+                                what_if_results.append({
+                                    vary_param: val,
+                                    'Predicted Production': pred
+                                })
+                            
+                            # Create dataframe from results
+                            what_if_df = pd.DataFrame(what_if_results)
+                            
+                            # Plot results
+                            fig = px.line(
+                                what_if_df, x=vary_param, 
+                                y='Predicted Production',
+                                labels={vary_param: vary_param, 'Predicted Production': 'Production (Sm³/j)'},
+                                title=f'Production vs {vary_param}'
+                            )
+                            
+                            # Add current value line
+                            fig.add_vline(
+                                x=input_values[vary_param],
+                                line_dash="dash",
+                                line_color="red",
+                                annotation_text="Current value"
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                
+                except Exception as e:
+                    st.error(f"Error making prediction: {str(e)}")
+        else:
+            st.info("Please train or load a model in the 'Model Training' tab first.")
+    
+    with ml_tabs[2]:  # Time Series Forecasting tab
+        st.subheader("Production Forecasting")
+        
+        # Well selection
+        well_list = historical_df['Puits'].unique().tolist()
+        valid_wells = []
+        
+        for well in well_list:
+            well_data = historical_df[historical_df['Puits'] == well]
+            if len(well_data) >= 15:  # Minimum data points for time series
+                valid_wells.append(well)
+        
+        if not valid_wells:
+            st.warning("No wells have sufficient data for time series forecasting (minimum 15 data points needed)")
+        else:
+            # Select well with sufficient data
+            selected_well = st.selectbox(
+                "Select Well for Forecasting",
+                options=valid_wells,
+                key="forecast_well_select"
+            )
+            
+            # Filter data for selected well
+            well_data = historical_df[historical_df['Puits'] == selected_well].copy()
+            well_data = well_data.sort_values('Date')
+            
+            # Prepare time series data
+            ts_data = well_data[['Date', 'Q Huile Corr (Sm³/j)']].copy()
+            ts_data.set_index('Date', inplace=True)
+            
+            # Plot historical data
+            st.subheader("Historical Production")
+            fig = px.line(
+                ts_data, y='Q Huile Corr (Sm³/j)',
+                labels={'Q Huile Corr (Sm³/j)': 'Production (Sm³/j)'},
+                title=f'Historical Production for Well {selected_well}'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Forecast configuration
+            st.subheader("Forecast Configuration")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                forecast_days = st.number_input(
+                    "Forecast Days",
+                    min_value=7,
+                    max_value=365,
+                    value=30,
+                    step=7
+                )
+            
+            with col2:
+                forecast_model = st.selectbox(
+                    "Forecast Model",
+                    options=["SARIMA", "Prophet", "Exponential Smoothing"],
+                    index=0
+                )
+            
+            with col3:
+                confidence_interval = st.slider(
+                    "Confidence Interval (%)",
+                    min_value=50,
+                    max_value=95,
+                    value=80,
+                    step=5
+                )
+            
+            # Generate forecast button
+            if st.button("Generate Forecast", type="primary"):
+                with st.spinner(f"Generating {forecast_days} day forecast using {forecast_model}..."):
+                    try:
+                        from statsmodels.tsa.statespace.sarimax import SARIMAX
+                        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+                        
+                        # Get production data
+                        y = ts_data['Q Huile Corr (Sm³/j)'].values
+                        
+                        if forecast_model == "SARIMA":
+                            # Simple automatic SARIMA
+                            model = SARIMAX(y, order=(1, 1, 1), seasonal_order=(1, 1, 1, 7))
+                            model_fit = model.fit(disp=False)
+                            
+                            # Generate forecast
+                            forecast_result = model_fit.get_forecast(steps=forecast_days)
+                            forecast_mean = forecast_result.predicted_mean
+                            forecast_ci = forecast_result.conf_int(alpha=(1-confidence_interval/100))
+                            
+                            # Create forecast dates
+                            last_date = ts_data.index[-1]
+                            forecast_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_days)
+                            
+                            # Create forecast dataframe
+                            forecast_df = pd.DataFrame({
+                                'Forecast': forecast_mean,
+                                'Lower CI': forecast_ci[:, 0],
+                                'Upper CI': forecast_ci[:, 1]
+                            }, index=forecast_dates)
+                            
+                        elif forecast_model == "Prophet":
+                            try:
+                                from prophet import Prophet
+                                
+                                # Prepare data for Prophet
+                                prophet_data = pd.DataFrame({
+                                    'ds': ts_data.index,
+                                    'y': ts_data['Q Huile Corr (Sm³/j)'].values
+                                })
+                                
+                                # Create and fit Prophet model
+                                prophet_model = Prophet(interval_width=confidence_interval/100)
+                                prophet_model.fit(prophet_data)
+                                
+                                # Create future dataframe
+                                future = prophet_model.make_future_dataframe(periods=forecast_days)
+                                
+                                # Generate forecast
+                                forecast = prophet_model.predict(future)
+                                
+                                # Extract forecast data
+                                historical_dates = ts_data.index
+                                forecast_dates = pd.date_range(start=historical_dates[-1] + pd.Timedelta(days=1), periods=forecast_days)
+                                
+                                forecast_df = pd.DataFrame({
+                                    'Forecast': forecast['yhat'].iloc[-forecast_days:].values,
+                                    'Lower CI': forecast['yhat_lower'].iloc[-forecast_days:].values,
+                                    'Upper CI': forecast['yhat_upper'].iloc[-forecast_days:].values
+                                }, index=forecast_dates)
+                                
+                            except ImportError:
+                                st.error("Prophet package is not installed. Using Exponential Smoothing instead.")
+                                forecast_model = "Exponential Smoothing"
+                        
+                        if forecast_model == "Exponential Smoothing":
+                            # Triple Exponential Smoothing
+                            try:
+                                # Try to find seasonality
+                                season_length = min(7, len(y) // 4)
+                                
+                                hw_model = ExponentialSmoothing(
+                                    y,
+                                    trend='add',
+                                    seasonal='add',
+                                    seasonal_periods=season_length
+                                )
+                            except:
+                                # Fallback to non-seasonal model
+                                hw_model = ExponentialSmoothing(y, trend='add')
+                            
+                            hw_fit = hw_model.fit()
+                            
+                            # Generate forecast
+                            forecast_mean = hw_fit.forecast(forecast_days)
+                            
+                            # Create forecast dates
+                            last_date = ts_data.index[-1]
+                            forecast_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_days)
+                            
+                            # Create forecast dataframe with simple confidence interval
+                            std_error = np.std(hw_fit.resid)
+                            z_value = 1.96 if confidence_interval >= 95 else 1.645 if confidence_interval >= 90 else 1.28
+                            
+                            forecast_df = pd.DataFrame({
+                                'Forecast': forecast_mean,
+                                'Lower CI': forecast_mean - z_value * std_error,
+                                'Upper CI': forecast_mean + z_value * std_error
+                            }, index=forecast_dates)
+                        
+                        # Plot forecast
+                        st.subheader(f"{forecast_days} Day Production Forecast")
+                        
+                        # Combine historical and forecast data
+                        full_df = pd.DataFrame({
+                            'Historical': ts_data['Q Huile Corr (Sm³/j)']
+                        })
+                        
+                        pd.DataFrame({
+                            'Forecast': forecast_df['Forecast'],
+                            'Lower CI': forecast_df['Lower CI'],
+                            'Upper CI': forecast_df['Upper CI']
+                        })
+                        
+                        # Create plot
+                        fig = go.Figure()
+                        
+                        # Add historical line
+                        fig.add_trace(go.Scatter(
+                            x=full_df.index,
+                            y=full_df['Historical'],
+                            mode='lines',
+                            name='Historical',
+                            line=dict(color='blue')
+                        ))
+                        
+                        # Add forecast line
+                        fig.add_trace(go.Scatter(
+                            x=forecast_df.index,
+                            y=forecast_df['Forecast'],
+                            mode='lines',
+                            name='Forecast',
+                            line=dict(color='red')
+                        ))
+                        
+                        # Add confidence interval
+                        fig.add_trace(go.Scatter(
+                            x=forecast_df.index.tolist() + forecast_df.index.tolist()[::-1],
+                            y=forecast_df['Upper CI'].tolist() + forecast_df['Lower CI'].tolist()[::-1],
+                            fill='toself',
+                            fillcolor='rgba(255,0,0,0.2)',
+                            line=dict(color='rgba(255,0,0,0)'),
+                            hoverinfo='skip',
+                            showlegend=True,
+                            name=f'{confidence_interval}% Confidence Interval'
+                        ))
+                        
+                        # Update layout
+                        fig.update_layout(
+                            title=f"{forecast_days} Day Production Forecast for Well {selected_well}",
+                            xaxis_title="Date",
+                            yaxis_title="Production (Sm³/j)",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display forecast statistics
+                        st.subheader("Forecast Statistics")
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric(
+                                "Average Forecast", 
+                                f"{forecast_df['Forecast'].mean():.2f} Sm³/j",
+                                delta=f"{forecast_df['Forecast'].mean() - ts_data['Q Huile Corr (Sm³/j)'].iloc[-30:].mean():.2f}"
+                            )
+                        
+                        with col2:
+                            st.metric(
+                                "End Production", 
+                                f"{forecast_df['Forecast'].iloc[-1]:.2f} Sm³/j",
+                                delta=f"{forecast_df['Forecast'].iloc[-1] - ts_data['Q Huile Corr (Sm³/j)'].iloc[-1]:.2f}"
+                            )
+                        
+                        with col3:
+                            st.metric(
+                                "Min Forecast", 
+                                f"{forecast_df['Lower CI'].min():.2f} Sm³/j"
+                            )
+                        
+                        with col4:
+                            st.metric(
+                                "Max Forecast", 
+                                f"{forecast_df['Upper CI'].max():.2f} Sm³/j"
+                            )
+                        
+                        # Display forecast data table
+                        with st.expander("Show Forecast Data"):
+                            forecast_display = forecast_df.copy()
+                            forecast_display.index = forecast_display.index.strftime('%Y-%m-%d')
+                            forecast_display = forecast_display.round(2)
+                            st.dataframe(forecast_display)
+                            
+                        # Save forecast button
+                        if st.button("Save Forecast to Database"):
+                            try:
+                                # Create forecast records
+                                forecast_records = []
+                                for date, row in forecast_df.iterrows():
+                                    forecast_records.append({
+                                        'Puits': selected_well,
+                                        'Date': date.strftime('%Y-%m-%d'),
+                                        'Q Huile Forecast (Sm³/j)': row['Forecast'],
+                                        'Forecast_Lower_CI': row['Lower CI'],
+                                        'Forecast_Upper_CI': row['Upper CI'],
+                                        'Forecast_Model': forecast_model,
+                                        'Forecast_Date': pd.Timestamp.now().strftime('%Y-%m-%d')
+                                    })
+                                
+                                # Save to database
+                                conn = init_db()
+                                c = conn.cursor()
+                                
+                                # Create forecast table if not exists
+                                c.execute('''
+                                    CREATE TABLE IF NOT EXISTS production_forecasts (
+                                        puits TEXT,
+                                        date TEXT,
+                                        oil_forecast REAL,
+                                        lower_ci REAL,
+                                        upper_ci REAL,
+                                        model_type TEXT,
+                                        forecast_date TEXT,
+                                        PRIMARY KEY (puits, date)
+                                    )
+                                ''')
+                                
+                                # Insert records
+                                for record in forecast_records:
+                                    c.execute('''
+                                        INSERT OR REPLACE INTO production_forecasts 
+                                        VALUES (:puits, :date, :Q Huile Forecast (Sm³/j), 
+                                                :Forecast_Lower_CI, :Forecast_Upper_CI, 
+                                                :Forecast_Model, :Forecast_Date)
+                                    ''', record)
+                                
+                                conn.commit()
+                                conn.close()
+                                
+                                st.success(f"Saved {len(forecast_records)} forecast records to database!")
+                            except Exception as e:
+                                st.error(f"Error saving forecast: {str(e)}")
+                    except Exception as e:
+                        st.error(f"Error generating forecast: {str(e)}")
 
 # Main application function
 def main():
@@ -2250,172 +3186,7 @@ def main():
         
         # Choke Performance Tab
         with tabs[5]:
-            st.header("🤖 Machine Learning Production Predictor")
-            
-            if not historical_df.empty:
-                # Select well for prediction
-                well_list = historical_df['Puits'].unique().tolist()
-                selected_well = st.selectbox(
-                    "Select Well for Production Prediction",
-                    options=well_list,
-                    key="ml_well_select"
-                )
-                
-                # Filter data for selected well
-                well_data = historical_df[historical_df['Puits'] == selected_well].copy()
-                well_data = well_data.sort_values('Date')
-                
-                # Check for required columns
-                required_cols = [
-                    'Date', 'Duse (mm)', 'Pt (bar)', 'Pp (bar)', 
-                    'Q Huile Corr (Sm³/j)', 'Duse Test (mm)',
-                    'Q Huile Test (Sm³/h)'
-                ]
-                
-                if all(col in well_data.columns for col in required_cols):
-                    # Feature Engineering
-                    well_data = feature_engineering(well_data)
-                    
-                    # Train/test split
-                    X = well_data[['Duse (mm)', 'Pt (bar)', 'Pp (bar)', 
-                                  'Duse Test (mm)', 'Test_Production', 
-                                  'Choke_Change', 'Days_Since_Test']]
-                    y = well_data['Q Huile Corr (Sm³/j)']
-                    
-                    # Model training interface
-                    st.subheader("Model Configuration")
-                    model_type = st.selectbox(
-                        "Select Model Type",
-                        options=["Random Forest", "XGBoost", "Neural Network"],
-                        index=0
-                    )
-                    
-                    if st.button("Train Production Prediction Model"):
-                        with st.spinner("Training model..."):
-                            # Train model
-                            model, metrics = train_production_model(X, y, model_type)
-                            
-                            # Save model
-                            joblib.dump(model, f"prod_pred_model_{selected_well}.joblib")
-                            st.session_state['trained_model'] = model
-                            st.session_state['model_metrics'] = metrics
-                            st.session_state['model_features'] = X.columns.tolist()
-                            
-                            st.success("Model trained successfully!")
-                    
-                    # Show model results if available
-                    if 'trained_model' in st.session_state:
-                        st.subheader("Model Performance")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("R² Score", f"{st.session_state['model_metrics']['r2']:.3f}")
-                        
-                        with col2:
-                            st.metric("MAE", f"{st.session_state['model_metrics']['mae']:.2f} Sm³/j")
-                        
-                        with col3:
-                            st.metric("RMSE", f"{st.session_state['model_metrics']['rmse']:.2f} Sm³/j")
-                        
-                        # Feature importance
-                        if hasattr(st.session_state['trained_model'], 'feature_importances_'):
-                            st.subheader("Feature Importance")
-                            features = st.session_state['model_features']
-                            importances = st.session_state['trained_model'].feature_importances_
-                            
-                            fig = px.bar(
-                                x=features,
-                                y=importances,
-                                labels={'x': 'Features', 'y': 'Importance'},
-                                title='Feature Importance'
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Prediction interface
-                    st.subheader("Production Prediction")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        current_choke = st.number_input(
-                            "Current Choke Size (mm)",
-                            min_value=0.0,
-                            max_value=50.0,
-                            value=float(well_data['Duse (mm)'].iloc[-1]),
-                            step=0.5
-                        )
-                        
-                        whp = st.number_input(
-                            "Wellhead Pressure (bar)",
-                            min_value=0.0,
-                            max_value=500.0,
-                            value=float(well_data['Pt (bar)'].iloc[-1]),
-                            step=1.0
-                        )
-                    
-                    with col2:
-                        test_choke = st.number_input(
-                            "Test Choke Size (mm)",
-                            min_value=0.0,
-                            max_value=50.0,
-                            value=float(well_data['Duse Test (mm)'].iloc[-1]),
-                            step=0.5
-                        )
-                        
-                        flp = st.number_input(
-                            "Flowline Pressure (bar)",
-                            min_value=0.0,
-                            max_value=500.0,
-                            value=float(well_data['Pp (bar)'].iloc[-1]),
-                            step=1.0
-                        )
-                    
-                    with col3:
-                        test_prod = st.number_input(
-                            "Test Production (Sm³/h)",
-                            min_value=0.0,
-                            max_value=500.0,
-                            value=float(well_data['Q Huile Test (Sm³/h)'].iloc[-1]),
-                            step=1.0
-                        )
-                        
-                        days_since_test = st.number_input(
-                            "Days Since Last Test",
-                            min_value=0,
-                            max_value=365,
-                            value=int((pd.to_datetime('today') - well_data['Date'].iloc[-1]).days),
-                            step=1
-                        )
-                    
-                    if st.button("Predict Production"):
-                        if 'trained_model' in st.session_state:
-                            # Prepare input features
-                            input_data = pd.DataFrame([[
-                                current_choke, whp, flp, 
-                                test_choke, test_prod * 24,  # Convert to daily
-                                current_choke - test_choke,  # Choke change
-                                days_since_test
-                            ]], columns=st.session_state['model_features'])
-                            
-                            # Make prediction
-                            prediction = st.session_state['trained_model'].predict(input_data)[0]
-                            
-                            # Display results
-                            st.success(f"Predicted Production: {prediction:.2f} Sm³/j")
-                            
-                            # Compare with theoretical
-                            K = well_data['Coef K'].mean() if 'Coef K' in well_data.columns else 0.1
-                            theoretical = K * current_choke**2 * (whp - flp)**0.5
-                            efficiency = (prediction / theoretical) * 100
-                            
-                            st.metric("Theoretical Production", f"{theoretical:.2f} Sm³/j")
-                            st.metric("Predicted Efficiency", f"{efficiency:.1f}%")
-                        else:
-                            st.warning("Please train a model first")
-                else:
-                    st.warning("Missing required columns for production prediction")
-            else:
-                st.info("No historical data available for modeling")
-        
+            ml_production_tab(historical_df)
         # Data View Tab
         with tabs[6]:
             st.header("Raw Data View")
